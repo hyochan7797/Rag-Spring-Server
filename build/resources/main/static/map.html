@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>현재 나의 주부 은행 지점</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="text/javascript" src="//dapi.kakao.com/v2/maps/sdk.js?appkey=cb0b5d24078c7208d59571c02b0575fe"></script>
+    <style>
+        .info-card {
+            transition: all 0.2s;
+        }
+        .info-card:hover {
+            transform: scale(1.02);
+            box-shadow: 0 10px 15px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+<div class="max-w-5xl mx-auto py-6 px-4">
+    <h1 class="text-3xl font-bold mb-6 text-blue-700">현재 나의 주변 은행 찾기</h1>
+
+    <div class="flex flex-wrap gap-2 mb-4">
+        <button onclick="searchNearbyBank('국민은행')" class="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded shadow">국민은행</button>
+        <button onclick="searchNearbyBank('하나은행')" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded shadow">하나은행</button>
+        <button onclick="searchNearbyBank('우리은행')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow">우리은행</button>
+        <button onclick="useMyLocation()" class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded shadow">내 위치 기준 전체 확인</button>
+        <select id="radiusSelect" class="border rounded px-2 py-1">
+            <option value="5000">반경 5km</option>
+            <option value="10000">반경 10km</option>
+            <option value="15000">반경 15km</option>
+            <option value="20000">반경 20km</option>
+        </select>
+    </div>
+
+    <div id="map" class="w-full h-[450px] rounded shadow mb-6"></div>
+
+    <h2 class="text-xl font-semibold mb-4 text-gray-800">현재 찾은 지점</h2>
+    <div id="recommend-list" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+</div>
+
+<script>
+    let map, markers = [], myMarker = null;
+    let userLat = 37.5665, userLng = 126.9780;
+    const REST_API_KEY = 'KakaoAK 0b0ef1b5cbff86f0dc70ad79388520a0'; // <- 여기에 Kakao REST API 키 삽입
+
+    function initMap(lat = userLat, lng = userLng) {
+        const mapContainer = document.getElementById('map');
+        const mapOption = {
+            center: new kakao.maps.LatLng(lat, lng),
+            level: 4
+        };
+        map = new kakao.maps.Map(mapContainer, mapOption);
+    }
+
+    function clearMarkers() {
+        markers.forEach(m => m.setMap(null));
+        markers = [];
+        document.getElementById("recommend-list").innerHTML = "";
+    }
+
+    function setMyLocationMarker(lat, lng) {
+        if (myMarker) myMarker.setMap(null);
+        const markerImage = new kakao.maps.MarkerImage(
+            "https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/markerStar.png",
+            new kakao.maps.Size(24, 35)
+        );
+        myMarker = new kakao.maps.Marker({
+            map: map,
+            position: new kakao.maps.LatLng(lat, lng),
+            image: markerImage,
+            zIndex: 10
+        });
+    }
+
+    function addMarker(place, distance = null) {
+        const marker = new kakao.maps.Marker({
+            map: map,
+            position: new kakao.maps.LatLng(place.y, place.x),
+            zIndex: 1
+        });
+        markers.push(marker);
+
+        const info = new kakao.maps.InfoWindow({
+            content: `<div style=\"padding:5px;font-size:14px;\"><b>${place.place_name}</b><br>${place.road_address_name || place.address_name}</div>`
+        });
+        kakao.maps.event.addListener(marker, 'click', () => info.open(map, marker));
+
+        const card = document.createElement('div');
+        card.className = "info-card bg-white rounded-lg p-4 shadow hover:shadow-lg border border-gray-100 cursor-pointer";
+        card.onclick = () => map.setCenter(new kakao.maps.LatLng(place.y, place.x));
+        card.innerHTML = `
+      <div class="text-lg font-bold text-blue-700 mb-1">${place.place_name}</div>
+      <div class="text-sm text-gray-600">${place.road_address_name || place.address_name}</div>
+      ${distance ? `<div class="mt-2 text-xs text-gray-500">거리: ${(distance / 1000).toFixed(2)} km</div>` : ''}
+    `;
+        document.getElementById("recommend-list").appendChild(card);
+    }
+
+    function getRadius() {
+        return parseInt(document.getElementById('radiusSelect').value || '5000');
+    }
+
+    function searchNearbyBank(bankName) {
+        if (!navigator.geolocation) return alert("위치 정보를 사용할 수 없습니다.");
+        navigator.geolocation.getCurrentPosition(pos => {
+            userLat = pos.coords.latitude;
+            userLng = pos.coords.longitude;
+            setMyLocationMarker(userLat, userLng);
+
+            clearMarkers();
+            const radius = getRadius();
+
+            fetch(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(bankName)}&x=${userLng}&y=${userLat}&radius=${radius}&sort=distance`, {
+                headers: { Authorization: REST_API_KEY }
+            })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.documents.length === 0) return alert("검색 결과가 없습니다.");
+                    data.documents.forEach(p => addMarker(p, getDistance(userLat, userLng, p.y, p.x)));
+                    map.setCenter(new kakao.maps.LatLng(userLat, userLng));
+                });
+        });
+    }
+
+    function useMyLocation() {
+        if (!navigator.geolocation) return alert("위치 정보를 사용할 수 없습니다.");
+        navigator.geolocation.getCurrentPosition(pos => {
+            userLat = pos.coords.latitude;
+            userLng = pos.coords.longitude;
+            setMyLocationMarker(userLat, userLng);
+            clearMarkers();
+            const radius = getRadius();
+            const banks = ['국민은행', '하나은행', '우리은행'];
+
+            Promise.all(banks.map(bank =>
+                fetch(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(bank)}&x=${userLng}&y=${userLat}&radius=${radius}&sort=distance`, {
+                    headers: { Authorization: REST_API_KEY }
+                }).then(res => res.json())
+            )).then(results => {
+                results.flatMap(r => r.documents.slice(0, 5)).forEach(p => {
+                    addMarker(p, getDistance(userLat, userLng, p.y, p.x));
+                });
+                map.setCenter(new kakao.maps.LatLng(userLat, userLng));
+            });
+        });
+    }
+
+    function getDistance(lat1, lng1, lat2, lng2) {
+        const R = 6371000;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLng = (lng2 - lng1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLng / 2) * Math.sin(dLng / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
+    initMap();
+</script>
+</body>
+</html>
