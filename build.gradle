@@ -32,8 +32,11 @@ dependencies {
     annotationProcessor 'org.projectlombok:lombok'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-    // Jpa
+    implementation 'jakarta.servlet:jakarta.servlet-api:6.0.0'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+
+
 
     // Bcrypt
     implementation group: 'org.mindrot', name: 'jbcrypt', version: '0.4'
@@ -42,6 +45,22 @@ dependencies {
     implementation 'io.jsonwebtoken:jjwt-api:0.11.5'
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.11.5'
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.11.5'
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+    // Spring Security
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.security:spring-security-web'
+    implementation 'org.springframework.security:spring-security-config'
+    implementation 'org.thymeleaf.extras:thymeleaf-extras-springsecurity6'
+    // Spring Data JPA (DB 연동)
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'mysql:mysql-connector-java:8.0.33'
+    // H2 Database (테스트용, MySQL을 사용할 경우 변경 가능)
+    runtimeOnly 'com.h2database:h2'
+
+    testImplementation 'org.springframework.security:spring-security-test'
+
+
 
 }
 

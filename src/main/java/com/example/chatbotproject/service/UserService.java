@@ -1,21 +1,23 @@
 package com.example.chatbotproject.service;
 
-import com.example.chatbotproject.entity.User;
-import com.example.chatbotproject.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import com.example.chatbotproject.entity.User;
+import com.example.chatbotproject.dto.AddUserRequest;
+import com.example.chatbotproject.repository.UserRepository;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
-import java.util.Optional;
 
-@Service
 @RequiredArgsConstructor
+@Service
 public class UserService {
+
     private final UserRepository userRepository;
+    private final BCryptPasswordEncoder bCryptPasswordEncoder;
 
-    public User registerUser(User user) {
-        return userRepository.save(user);
-    }
-
-    public Optional<User> getUserByEmail(String email) {
-        return userRepository.findByEmail(email);
+    public Long save(AddUserRequest dto) {
+        return userRepository.save(User.builder()
+                .email(dto.getEmail())
+                .password(bCryptPasswordEncoder.encode(dto.getPassword()))
+                .build()).getId();
     }
 }
