@@ -1,0 +1,63 @@
+version: '3.9'
+
+services:
+  finance-mysql:
+    image: mysql:8
+    container_name: finance-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: 1234
+      MYSQL_DATABASE: finance_db
+      MYSQL_USER: hyochan
+      MYSQL_PASSWORD: 131890
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  fastapi:
+    build:
+      context: /Users/hyochan/Desktop/Project/rag/python
+    container_name: fastapi-app
+    restart: always
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: finance-mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: finance_db
+      MYSQL_USER: hyochan
+      MYSQL_PASSWORD: 131890
+    depends_on:
+      finance-mysql:
+        condition: service_healthy
+    volumes:
+      - /Users/hyochan/Desktop/Project/rag/python/app/data:/app/data
+
+  spring:
+    build:
+      context: /Users/hyochan/Desktop/Project/rag/java
+    container_name: spring-app
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://finance-mysql:3306/finance_db
+      SPRING_DATASOURCE_USERNAME: hyochan
+      SPRING_DATASOURCE_PASSWORD: 131890
+      FASTAPI_URL: http://fastapi:8000/chat
+    depends_on:
+      finance-mysql:
+        condition: service_healthy
+      fastapi:
+        condition: service_started
+
+volumes:
+  mysql_data:

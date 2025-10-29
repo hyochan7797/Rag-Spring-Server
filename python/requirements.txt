@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pandas
+numpy
+faiss-cpu
+openai
+tqdm
+chardet
+python-dotenv
