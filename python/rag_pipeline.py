@@ -2,9 +2,27 @@ import pandas as pd
 import numpy as np
 import faiss
 from openai import OpenAI
-import os
 import chardet
 from tqdm import tqdm
+from dotenv import load_dotenv
+import os
+
+dotenv_path = "/app/.env"
+print(f"🔍 Loading .env from: {dotenv_path}")
+
+if os.path.exists(dotenv_path):
+    load_dotenv(dotenv_path=dotenv_path, override=True)
+else:
+    print("⚠️ .env 파일을 찾을 수 없습니다.")
+
+api_key = os.getenv("OPENAI_API_KEY")
+print(f"🔑 OPENAI_API_KEY 확인: {api_key[:10] + '...' if api_key else '없음'}")
+
+if not api_key:
+    raise ValueError("OPENAI_API_KEY 환경변수가 설정되어 있지 않습니다.")
+
+# ✅ OpenAI 클라이언트 반드시 위에서 선언해야 함
+client = OpenAI(api_key=api_key)
 
 # ===== CSV 경로 =====
 credit_csv = "/app/data/sinyoung.csv"
@@ -14,12 +32,6 @@ dambo_csv = "/app/data/dambo.csv"
 DATA_DIR = "/data"
 os.makedirs(DATA_DIR, exist_ok=True)
 index_file_path = os.path.join(DATA_DIR, "faiss_index.index")
-
-# ===== OpenAI 클라이언트 =====
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise ValueError("OPENAI_API_KEY 환경변수가 설정되어 있지 않습니다.")
-client = OpenAI(api_key=api_key)
 
 # ===== CSV 로드 =====
 def detect_encoding(file_path):
@@ -49,7 +61,13 @@ def build_documents(df):
 [연체이자] {row.get('연체이자(지연배상금) 관련 사항', '')}
 [고객 유의사항] {row.get('고객께서 알아두셔야 할 사항', '')}
 """.strip()
-        docs.append({"text": doc, "metadata": {"상품명": row.get("상품명", ""), "loan_type": row.get("loan_type", "")}})
+        docs.append({
+            "text": doc,
+            "metadata": {
+                "상품명": row.get("상품명", ""),
+                "loan_type": row.get("loan_type", "")
+            }
+        })
     return docs
 
 documents = build_documents(df_all)
@@ -74,7 +92,9 @@ else:
 
 # ===== 문서 검색 =====
 def search_similar_docs(history_list, query, top_k=2, max_chars=1500):
-    recent_context = " ".join([msg["content"] for msg in history_list[-4:] if msg["role"] == "user"])
+    recent_context = " ".join(
+        [msg["content"] for msg in history_list[-4:] if msg["role"] == "user"]
+    )
     full_query = (recent_context + " " + query).strip()
     if not full_query:
         return []
