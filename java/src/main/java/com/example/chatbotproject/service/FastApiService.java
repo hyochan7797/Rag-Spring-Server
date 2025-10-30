@@ -10,7 +10,10 @@ import java.util.*;
 public class FastApiService {
 
     public String askFastApi(Long userId, String question) {
-        String url = "http://localhost:8000/chat";
+        String url = System.getenv("FASTAPI_URL");
+        if (url == null || url.isEmpty()) {
+            url = "http://localhost:8000/chat"; // fallback (로컬 실행용)
+        }
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("user_id", userId);
