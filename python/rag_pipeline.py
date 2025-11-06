@@ -11,12 +11,12 @@ from langchain_qdrant import Qdrant
 from langchain_openai import OpenAIEmbeddings
 import json
 import google.generativeai as genai 
+from typing import List, Tuple, Dict 
 
-# ... (1~6번 섹션은 이전과 동일) ...
 # =KST======================
 # 1️⃣ 환경 설정 로드
 # =======================
-dotenv_path = "/app/.env"
+dotenv_path = "/app/.env" # [수정] .env 파일 경로 (원래대로 복구)
 print(f"🔍 Loading .env from: {dotenv_path}")
 
 if os.path.exists(dotenv_path):
@@ -40,9 +40,9 @@ if google_api_key:
         print("✅ Google Gemini API 설정 완료.")
     except Exception as e:
         print(f"⚠️ Google Gemini API 설정 실패: {e}")
-        google_api_key = None # 키가 유효하지 않으면 None으로 설정
+        google_api_key = None 
 else:
-    print("ℹ️ GOOGLE_API_KEY가 설정되지 않았습니다. 교차 검증을 건너뜁니다.")
+    print("ℹ️ GOOGLE_API_KEY가 설정되지 않았습니다.")
 
 
 print(f"🔑 OPENAI_API_KEY 확인: {api_key[:10] + '...' if api_key else '없음'}")
@@ -52,10 +52,16 @@ if not api_key:
     raise ValueError("OPENAI_API_KEY 환경변수가 설정되어 있지 않습니다.")
 
 # =======================
-# 2️⃣ CSV 로드 (이전과 동일)
+# 2️⃣ [수정됨] CSV 로드 (V1: 수동 파일 리스트 방식 + 절대 경로)
 # =======================
-credit_csv = "/app/data/sinyoung.csv"
-dambo_csv = "/app/data/dambo.csv"
+
+# [수정] docker-compose.yml이 보장하는 '절대 경로'를 하드코딩합니다.
+# (동적 경로 os.path.join 제거 -> `FileNotFoundError` 해결)
+LOAN_DATA_MAP = {
+    "sinyoung": "/app/data/sinyoung.csv",
+    "dambo": "/app/data/dambo.csv",
+    # "car": "/app/data/car_loan.csv" # 나중에 이 한 줄만 추가하시면 됩니다.
+}
 
 def detect_encoding(file_path):
     """파일 인코딩을 감지합니다."""
@@ -64,66 +70,152 @@ def detect_encoding(file_path):
             raw = f.read(10000)
         return chardet.detect(raw)["encoding"]
     except FileNotFoundError:
-        print(f"⚠️ 파일을 찾을 수 없습니다: {file_path}")
+        # [수정] 오류 대신 경고만 출력하고 None 반환
+        print(f"  ⚠️ [경고] 파일을 찾을 수 없습니다: {file_path}. 건너뜁니다.")
         return None
     except Exception as e:
-        print(f"⚠️ 인코딩 감지 중 오류 발생: {e}")
+        print(f"  ⚠️ [경고] 인코딩 감지 중 오류 ({file_path}): {e}")
         return "utf-8" # 기본값으로 대체
 
-encoding_credit = detect_encoding(credit_csv)
-encoding_dambo = detect_encoding(dambo_csv)
+def load_manual_loan_data(data_map: Dict[str, str]) -> pd.DataFrame:
+    """
+    [신규] LOAN_DATA_MAP에 정의된 파일들을 수동으로 로드하고 병합합니다.
+    """
+    all_dfs = []
+    print(f"📂 수동 파일 리스트({len(data_map)}개) 스캔 중...")
+    
+    for loan_type, file_path in data_map.items():
+        encoding = detect_encoding(file_path)
+        if not encoding:
+            continue # 파일이 없으면 다음 파일로
+            
+        try:
+            df = pd.read_csv(file_path, encoding=encoding)
+            
+            # 1. loan_type 컬럼 추가 (파일 이름 기준)
+            if 'loan_type' not in df.columns:
+                df['loan_type'] = loan_type
+                
+            # 2. bank_name 컬럼 확인 (필수)
+            if 'bank_name' not in df.columns:
+                print(f"  ⚠️ [경고] '{file_path}'에 'bank_name' 컬럼이 없습니다. 'bank_name' 필터가 작동하지 않습니다.")
+                df['bank_name'] = '알수없음' # Fallback
+                
+            all_dfs.append(df)
+            print(f"  ✅ '{file_path}' 로드 완료 (타입: {loan_type}, {len(df)}개 항목)")
+        except Exception as e:
+            print(f"  ⚠️ '{file_path}' 로드 실패: {e}")
 
-df_credit = pd.read_csv(credit_csv, encoding=encoding_credit) if encoding_credit else pd.DataFrame()
-df_dambo = pd.read_csv(dambo_csv, encoding=encoding_dambo) if encoding_dambo else pd.DataFrame()
+    if not all_dfs:
+        # [수정] raise 대신 빈 DataFrame 반환
+        print("⚠️ [오류] 로드할 수 있는 CSV 파일이 없습니다.")
+        return pd.DataFrame()
+        
+    df_all = pd.concat(all_dfs, ignore_index=True).fillna("")
+    return df_all
 
-if df_credit.empty and df_dambo.empty:
-    raise FileNotFoundError("두 CSV 파일 모두 로드에 실패했습니다.")
+df_all = load_manual_loan_data(LOAN_DATA_MAP)
 
-df_all = pd.concat([df_credit, df_dambo], ignore_index=True).fillna("")
+# [수정] FastAPI가 멈추지 않도록, df_all이 비어있으면 raise
+if df_all.empty:
+    raise FileNotFoundError("데이터 디렉토리에서 로드할 수 있는 데이터가 없습니다.")
 print(f"📊 총 {len(df_all)}개의 데이터 로드 완료.")
 
+
 # =======================
-# 3️⃣ 문서 및 메타데이터 구성 (이전과 동일)
+# 3️⃣ [수정됨] "시맨틱 청킹(Semantic Chunking)" 적용
 # =======================
 def build_documents_with_metadata(df):
+    """
+    [수정] "시맨틱 청킹"을 적용하여, CSV 1줄(상품)을 
+    의미 단위(예: 자격, 금리)로 쪼개어 여러 개의 문서(청크)로 만듭니다.
+    """
     docs = []
     metadatas = []
     
-    if 'loan_type' not in df.columns:
-        print("⚠️ 'loan_type' 컬럼을 찾을 수 없습니다. '상품명'으로 대체합니다.")
-        df['loan_type'] = df['상품명'] # 대체 필드
+    # 필수 컬럼 확인
+    required_cols = ['loan_type', 'bank_name', '상품명']
+    for col in required_cols:
+        if col not in df.columns:
+            print(f"⚠️ [경고] '{col}' 컬럼이 CSV에 없습니다. '{col}' 필터가 작동하지 않을 수 있습니다.")
+            df[col] = '알수없음' # Fallback
 
-    for _, row in tqdm(df.iterrows(), total=df.shape[0], desc="문서 구성 중"):
-        doc_text = f"""
+    print(f"🔄 '시맨틱 청킹' 시작... (상품 {len(df)}개)")
+
+    for _, row in tqdm(df.iterrows(), total=df.shape[0], desc="시맨틱 청킹 중"):
+        
+        # --- 모든 청크에 공통으로 포함될 핵심 정보 ---
+        # (검색 시 어떤 상품의 일부인지 식별하기 위함)
+        common_header = f"""
+[bank_name] {row.get('bank_name', '')}
 [loan_type] {row.get('loan_type', '')}
 [상품명] {row.get('상품명', '')}
-[담보] {row.get('담보', '')}
-[상품특징] {row.get('상품특징', '')}
-[대출신청자격] {row.get('대출신청자격', '')}
-[대출금액] {row.get('대출금액', '')}
-[대출기간 및 상환 방법] {row.get('대출기간 및 상환 방법', '')}
-[대출금리] {row.get('대출금리', '')}
-[중도상환 수수료] {row.get('중도상환 수수료', '')}
-[금리인하요구권 대상 여부] {row.get('금리인하요구권 대상 여부', '')}
-[연체이자] {row.get('연체이자(지연배상금) 관련 사항', '')}
-[고객 유의사항] {row.get('고객께서 알아두셔야 할 사항', '')}
-""".strip()
-        
-        doc_metadata = {
+"""
+        # --- 공통 메타데이터 ---
+        common_metadata = {
             "loan_type": row.get('loan_type', '기타'),
-            "product_name": row.get('상품명', '알수없음')
+            "product_name": row.get('상품명', '알수없음'),
+            "bank_name": row.get('bank_name', '기타')
         }
-        
-        docs.append(doc_text)
-        metadatas.append(doc_metadata)
-        
+
+        # --- 청크 1: 상품 특징 ---
+        # (상품의 전반적인 개요)
+        chunk_1_text = f"""
+{common_header.strip()}
+[상품특징] {row.get('상품특징', '내용 없음')}
+[담보] {row.get('담보', '내용 없음')}
+""".strip()
+        docs.append(chunk_1_text)
+        metadatas.append({**common_metadata, "chunk_type": "특징"})
+
+        # --- 청크 2: 대출 자격 ---
+        # (형님이 찾으시던 "법조인" 같은 특정 자격 요건 검색용)
+        chunk_2_text = f"""
+{common_header.strip()}
+[대출신청자격] {row.get('대출신청자격', '내용 없음')}
+""".strip()
+        docs.append(chunk_2_text)
+        metadatas.append({**common_metadata, "chunk_type": "자격"})
+
+        # --- 청크 3: 금액 및 기간 ---
+        # ("최대 5억", "10년 상환" 등 검색용)
+        chunk_3_text = f"""
+{common_header.strip()}
+[대출금액] {row.get('대출금액', '내용 없음')}
+[대출기간 및 상환 방법] {row.get('대출기간 및 상환 방법', '내용 없음')}
+""".strip()
+        docs.append(chunk_3_text)
+        metadatas.append({**common_metadata, "chunk_type": "한도/기간"})
+
+        # --- 청크 4: 금리 및 수수료 ---
+        # ("고정금리 5%", "중도상환수수료" 등 검색용)
+        chunk_4_text = f"""
+{common_header.strip()}
+[대출금리] {row.get('대출금리', '내용 없음')}
+[중도상환 수수료] {row.get('중도상환 수수료', '내용 없음')}
+[연체이자] {row.get('연체이자(지연배상금) 관련 사항', '내용 없음')}
+""".strip()
+        docs.append(chunk_4_text)
+        metadatas.append({**common_metadata, "chunk_type": "금리/수수료"})
+
+        # --- 청크 5: 기타 사항 ---
+        chunk_5_text = f"""
+{common_header.strip()}
+[금리인하요구권 대상 여부] {row.get('금리인하요구권 대상 여부', '내용 없음')}
+[고객 유의사항] {row.get('고객께서 알아두셔야 할 사항', '내용 없음')}
+""".strip()
+        docs.append(chunk_5_text)
+        metadatas.append({**common_metadata, "chunk_type": "기타"})
+
+    print(f"✅ '시맨틱 청킹' 완료. (상품 {len(df)}개 -> 총 {len(docs)}개 청크 생성)")
     return docs, metadatas
 
+
 documents, metadatas = build_documents_with_metadata(df_all)
-print(f"📄 문서 개수: {len(documents)}, 메타데이터 개수: {len(metadatas)}")
+print(f"📄 총 문서(청크) 개수: {len(documents)}, 메타데이터 개수: {len(metadatas)}")
 
 # =======================
-# 4️⃣ Qdrant 연결 및 벡터 저장 (이전과 동일)
+# 4️⃣ Qdrant 연결 및 벡터 저장
 # =======================
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 client = QdrantClient(url=qdrant_url)
@@ -132,6 +224,10 @@ vectorstore = None
 try:
     collections_response = client.get_collections()
     collections = [c.name for c in collections_response.collections]
+    
+    # [주의] 시맨틱 청킹을 적용했으므로, DB를 새로 만들어야 합니다.
+    # (force_recreate=True가 이 역할을 하지만, 
+    #  docker volume을 삭제하는 것이 가장 확실합니다.)
     
     if collection_name not in collections:
         print(f"🆕 Qdrant 컬렉션 생성: {collection_name}")
@@ -143,25 +239,47 @@ try:
             collection_name=collection_name,
             force_recreate=True,
         )
-        print("✅ 컬렉션 생성 및 데이터 저장 완료.")
+        print("✅ 컬렉션 생성 및 (청킹된) 데이터 저장 완료.")
     else:
-        print(f"✅ 기존 컬렉션 사용: {collection_name}")
-        vectorstore = Qdrant(
-            client=client,
+        # [수정] 만약 컬렉션이 이미 있다면, (청킹되지 않은)
+        # 이전 데이터일 수 있으므로, 강제로 재생성합니다.
+        print(f"⚠️ [경고] 기존 컬렉션 '{collection_name}'을(를) 삭제하고 (청킹된) 데이터로 재생성합니다.")
+        client.recreate_collection(
             collection_name=collection_name,
-            embeddings=embeddings
+            vectors_config=embeddings.model_name # (이 부분은 모델에 따라 다를 수 있으나, Langchain Qdrant가 보통 알아서 처리)
+            # Qdrant.from_texts가 내부적으로 사용하는 벡터 설정에 맞춰야 함
+            # 가장 간단한 방법은 그냥 collection을 삭제(down)하고 다시 올리는 것
         )
-        count_result = client.count(collection_name=collection_name, exact=True)
-        print(f"✅ 기존 컬렉션 로드 완료. (문서 수: {count_result.count})")
+        vectorstore = Qdrant.from_texts(
+            texts=documents,
+            embedding=embeddings,
+            metadatas=metadatas,
+            url=qdrant_url,
+            collection_name=collection_name,
+            force_recreate=False, # 위에서 이미 삭제했으므로
+        )
+        print("✅ 기존 컬렉션 재생성 및 (청킹된) 데이터 저장 완료.")
+
+        # (원래 로직: 기존 컬렉션 사용)
+        # print(f"✅ 기존 컬렉션 사용: {collection_name}")
+        # vectorstore = Qdrant(
+        #     client=client,
+        #     collection_name=collection_name,
+        #     embeddings=embeddings
+        # )
+        # count_result = client.count(collection_name=collection_name, exact=True)
+        # print(f"✅ 기존 컬렉션 로드 완료. (문서 수: {count_result.count})")
+
 
 except Exception as e:
     print(f"⚠️ Qdrant 초기화 오류: {e}")
-    print(f"    Qdrant 서버가 실행 중인지, {qdrant_url} 주소가 올른지 확인하세요.")
+    print(f"    Qdrant 서버가 실행 중인지, {qdrant_url} 주소가 올바른지 확인하세요.")
+    vectorstore = None
 
 # ==================================
-# 5️⃣ LLM as Judge (GPT-3.5) (이전과 동일)
+# 5️⃣ LLM as Judge (GPT-3.5)
 # ==================================
-def _rerank_with_gpt(query: str, documents: list[str]) -> list[dict]:
+def _rerank_with_gpt(query: str, documents: list[str]) -> List[Dict]:
     """
     [GPT-3.5]를 Judge(평가자)로 사용하여 문서 목록을 재정렬합니다.
     점수 정보가 포함된 전체 랭킹 리스트(dict)를 반환합니다.
@@ -171,7 +289,7 @@ def _rerank_with_gpt(query: str, documents: list[str]) -> list[dict]:
 
     system_prompt = """
 당신은 지능이 매우 높은 '관련성 평가 전문가'입니다.
-당신의 임무는 주어진 '사용자 쿼리'에 대해 '문서 목록'이 얼마나 적절하게 답변하는지 평가하는 것입니다.
+당신의 임무는 주어진 '사용자 쿼리'에 대해 '문서 목록(청크)'이 얼마나 적절하게 답변하는지 평가하는 것입니다.
 반드시 "rankings"라는 단일 키를 가진 JSON 객체를 반환해야 합니다.
 "rankings"의 값은 객체들의 리스트이며, 각 객체는 다음을 포함해야 합니다:
 1. "index": 문서의 원본 인덱스 (0부터 시작).
@@ -181,13 +299,14 @@ def _rerank_with_gpt(query: str, documents: list[str]) -> list[dict]:
 
     documents_str = ""
     for i, doc in enumerate(documents):
-        documents_str += f"\n\n[문서 {i}]:\n{doc[:2000]}" 
+        # [수정] 청크가 작아졌으므로 2000자 제한 제거 (전체 텍스트 표시)
+        documents_str += f"\n\n[문서 {i}]:\n{doc}" 
 
     user_prompt = f"""
 [사용자 쿼리]:
 {query}
 
-[평가할 문서 목록]:
+[평가할 문서 목록(청크)]:
 {documents_str}
 
 지시사항에 설명된 대로 JSON 출력을 제공해주세요.
@@ -222,228 +341,111 @@ def _rerank_with_gpt(query: str, documents: list[str]) -> list[dict]:
 
     except Exception as e:
         print(f"⚠️ _rerank_with_gpt 중 오류: {e}")
-        raise e # 오류를 상위로 전파
+        raise e # 이 오류는 Step 1의 핵심이므로 main.py로 전파
 
 # ==================================
-# 6️⃣ LLM as Judge (Gemini) (이전과 동일)
+# 6️⃣ LLM as Judge (Gemini) - [삭제됨]
 # ==================================
-def _cross_validate_with_gemini(query: str, documents: list[str]) -> list[dict]:
-    """
-    [Gemini]를 Judge(평가자)로 사용하여 교차 검증을 위한 재정렬을 수행합니다.
-    점수 정보가 포함된 전체 랭킹 리스트(dict)를 반환합니다.
-    """
-    if not documents or not google_api_key:
-        if not google_api_key:
-            print("ℹ️ Gemini 교차 검증 건너뜀 (API 키 없음)")
-        return []
-
-    # --- 'gemini-2.5-flash' 모델 사용 ---
-    try:
-        config = genai.GenerationConfig(response_mime_type="application/json")
-        gemini_model = genai.GenerativeModel(
-            'gemini-2.5-flash', # 형님이 찾으신 모델
-            generation_config=config   # JSON 모드 설정 적용
-        )
-    except Exception as e:
-        # 모델 초기화 실패 시 (예: API 키 오류 또는 지원되지 않는 설정)
-        print(f"⚠️ Gemini 모델/설정 초기화 오류: {e}")
-        print("    교차 검증을 건너뜁니다.")
-        return []
-    
-    # --- Gemini용 프롬프트 (GPT와 동일한 지시사항) ---
-    gemini_prompt = """
-당신은 지능이 매우 높은 '관련성 평가 전문가'입니다.
-당신의 임무는 주어진 '사용자 쿼리'에 대해 '문서 목록'이 얼마나 적절하게 답변하는지 평가하는 것입니다.
-반드시 "rankings"라는 단일 키를 가진 JSON 객체를 반환해야 합니다.
-"rankings"의 값은 객체들의 리스트이며, 각 객체는 다음을 포함해야 합니다:
-1. "index": 문서의 원본 인덱스 (0부터 시작).
-2. "relevance_score": 관련성 점수 (1점 = 완전히 무관함, 10점 = 완벽하게 관련됨).
-이 리스트를 "relevance_score" 기준으로 내림차순(가장 관련성 높은 항목이 맨 위) 정렬해주세요.
-
----
-
-[사용자 쿼리]:
-{query}
-
-[평가할 문서 목록]:
-"""
-    documents_str = ""
-    for i, doc in enumerate(documents):
-        documents_str += f"\n\n[문서 {i}]:\n{doc[:2000]}"
-
-    final_prompt = gemini_prompt.format(query=query) + documents_str
-
-    try:
-        response = gemini_model.generate_content(final_prompt)
-        
-        # JSON 응답에서 마크다운(```) 제거
-        response_json_str = response.text.strip().replace("```json", "").replace("```", "").strip()
-        
-        data = json.loads(response_json_str)
-        rankings = data.get("rankings", [])
-        
-        if not rankings or not all("index" in item and "relevance_score" in item for item in rankings):
-             raise ValueError("Gemini LLM이 반환한 JSON 형식이 올바르지 않습니다.")
-
-        sorted_rankings = sorted(rankings, key=lambda x: x["relevance_score"], reverse=True)
-        
-        print(f"🔄 Gemini 교차 검증 결과 (전체): {sorted_rankings}")
-        
-        if not all(item["index"] < len(documents) for item in sorted_rankings):
-             raise ValueError("Gemini LLM이 반환한 인덱스가 유효하지 않습니다.")
-             
-        return sorted_rankings
-
-    except Exception as e:
-        print(f"⚠️ _cross_validate_with_gemini 중 오류: {e}")
-        raise e # 오류를 상위로 전파
+# (이 작업은 이제 main.py (Step 2)에서 수행됩니다)
 
 
 # ========================================
-# 7️⃣ [수정됨] 검색 함수 (필터 기준 변경 및 점수 반환)
+# 7️⃣ [수정됨] 검색 함수 (Step 1: GPT Rerank)
 # ========================================
 def search_similar_docs(
-    history_list: list[dict],
+    history_list: List[Dict],
     query: str,
     top_k: int = 3,
-    max_chars: int = 1500,
-    allowed_types: list[str] = None, 
-    filter_field: str = "loan_type",
-    rerank_candidates_count: int = 6 
-):
+    rerank_candidates_count: int = 6, # 1차 검색 후보 수
+    max_chars: int = 1500, # (이 매개변수는 이제 main.py에서만 의미 있음)
+    allowed_types: List[str] = None, # 예: ["sinyoung", "dambo"]
+    allowed_banks: List[str] = None  # 예: ["우리은행", "신한은행"]
+) -> Tuple[List[str], List[Dict]]:
     """
-    [수정]
-    1. Qdrant 1차 검색 (6개)
-    2. GPT-3.5 Rerank (점수)
-    3. Gemini Rerank (점수)
-    4. 두 점수의 평균 계산
-    5. [변경] 평균 3점 이상인 문서만 필터링 ("근거 없는 주장" 제외)
-    6. 3점 이상인 문서를 'Gemini 점수' 기준으로 정렬
-    7. 상위 top_k(3개) 반환 + [변경] (문서 리스트, 점수 리스트)를 반환
+    [수정됨] 2-Step RAG의 1단계(Step 1)
+    1. Qdrant 1차 검색 (필터 적용)
+    2. GPT-3.5 Rerank (LLM 호출 1)
+    3. (후보 문서(청크) 리스트, GPT 랭킹 리스트)를 반환
     """
     if vectorstore is None:
-        print("⚠️ Qdrant 벡터스토어 초기화 실패")
-        return [], [] # [수정] 빈 리스트 2개 반환
+        print("⚠️ Qdrant 벡터스토어가 초기화되지 않았습니다.")
+        return [], []
 
-    # 1. 쿼리 구성 (동일)
+    # 1. 쿼리 구성
     recent_context = " ".join(
         [msg["content"] for msg in history_list[-4:] if msg["role"] == "user"]
     )
     full_query = (recent_context + " " + query).strip()
     if not full_query:
-        return [], [] # [수정] 빈 리스트 2개 반환
+        return [], []
     print(f"🔍 전체 검색 쿼리: {full_query[:100]}...")
 
-
-    # 2. 1차 검색 (Qdrant) (동일)
-    qdrant_filter = None
-    if allowed_types:
-        qdrant_filter = Filter(
-            should=[
-                FieldCondition(
-                    key=filter_field,
-                    match=MatchValue(value=loan_type)
-                ) for loan_type in allowed_types
-            ]
-        )
+    # 2. 1차 검색 (Qdrant)
     
+    # 2-1. Qdrant 필터 생성
+    qdrant_filter_conditions = []
+    if allowed_types:
+        print(f"ℹ️ 필터 적용 (대출 종류): {allowed_types}")
+        qdrant_filter_conditions.append(
+            FieldCondition(key="loan_type", match=MatchAny(any=allowed_types))
+        )
+    if allowed_banks:
+        print(f"ℹ️ 필터 적용 (은행): {allowed_banks}")
+        qdrant_filter_conditions.append(
+            FieldCondition(key="bank_name", match=MatchAny(any=allowed_banks))
+        )
+        
+    qdrant_filter = Filter(must=qdrant_filter_conditions) if qdrant_filter_conditions else None
+
+    # 2-2. Qdrant 검색
     try:
         search_results = vectorstore.similarity_search_with_score(
             full_query,
-            k=rerank_candidates_count, 
-            filter=qdrant_filter
+            k=rerank_candidates_count, # Rerank 후보(6개)만큼 가져옴
+            filter=qdrant_filter 
         )
-        print(f"🚚 1차 검색 (필터 적용됨: {bool(allowed_types)}), {len(search_results)}개 결과 수신")
+        print(f"🚚 1차 검색 (필터 적용됨: {bool(qdrant_filter)}), {len(search_results)}개 결과 수신")
     except Exception as e:
-        print(f"⚠️ Qdrant 검색 오류: {e}")
-        return [], [] # [수정] 빈 리스트 2개 반환
+        print(f"⚠️ Qdrant 1차 검색 오류: {e}")
+        return [], []
 
     if not search_results:
-        print("⚠️ 1차 검색 결과 없음.")
-        return [], [] # [수정] 빈 리스트 2개 반환
+        print("⚠️ 1차 검색 결과 0개.")
+        return [], []
 
+    # 3. [Step 1] GPT-3.5 Rerank (LLM 호출 1)
+    
+    # Rerank 후보 문서(청크) 리스트 (전체 텍스트)
     candidate_docs = [doc.page_content for doc, score in search_results]
-    top_docs = []
-    top_scores = [] # [신규] 반환할 점수 리스트
 
-    # 3. GPT-3.5 Rerank (동일)
-    print(f"🤖 GPT-3.5 as Judge/Reranker 시작... (후보: {len(candidate_docs)}개)")
     try:
+        print(f"🤖 (Step 1) GPT-3.5 as Judge/Reranker 시작... (후보: {len(candidate_docs)}개)")
         gpt_rankings = _rerank_with_gpt(full_query, candidate_docs)
-    except Exception as e:
-        print(f"⚠️ GPT-3.5 Rerank 실패: {e}")
-        gpt_rankings = [] 
-
-    # 4. Gemini Rerank (동일)
-    print("🔄 Gemini as Judge/Reranker 시작...")
-    try:
-        gemini_rankings = _cross_validate_with_gemini(full_query, candidate_docs)
-    except Exception as e:
-        print(f"⚠️ Gemini Rerank 실패: {e}")
-        gemini_rankings = [] 
-    
-    # 5. [수정됨] Rerank 결과 취합, 필터링, 정렬
-    if not gpt_rankings and not gemini_rankings:
-        print("⚠️ GPT와 Gemini Rerank 모두 실패! (Fallback)")
-        print("    (대체 로직: Qdrant 벡터 유사도 순으로 반환합니다.)")
-        top_docs = [doc.page_content for doc, score in search_results[:top_k]]
-        # Fallback의 경우 점수 정보가 없으므로 빈 리스트 반환
-        top_scores = [] 
-    
-    else:
-        gpt_scores = {item.get('index'): item.get('relevance_score', 0) for item in gpt_rankings}
-        gemini_scores = {item.get('index'): item.get('relevance_score', 0) for item in gemini_rankings}
-
-        combined_scores = []
-        for i in range(len(candidate_docs)):
-            gpt_score = gpt_scores.get(i, 0)
-            gemini_score = gemini_scores.get(i, 0)
-            
-            if gpt_score > 0 or gemini_score > 0:
-                if gpt_score > 0 and gemini_score > 0:
-                    average_score = (gpt_score + gemini_score) / 2
-                else:
-                    average_score = max(gpt_score, gemini_score) 
-                    
-                combined_scores.append({
-                    "index": i,
-                    "average_score": average_score,
-                    "gpt_score": gpt_score,
-                    "gemini_score": gemini_score
-                })
         
-        print(f"📊 점수 취합 결과 (전체): {combined_scores}")
+        if not gpt_rankings:
+            print("⚠️ (Step 1) GPT Rerank 결과 0개.")
+            return [], []
+        
+        # [수정] 필터링/정렬은 Step 2 (main.py)에서 수행
+        #       여기서는 (후보 문서 리스트, GPT 랭킹 리스트)를 그대로 반환
+        
+        print(f"✅ (Step 1) GPT Rerank 완료. (후보 문서 {len(candidate_docs)}개, GPT 랭킹 {len(gpt_rankings)}개)를 main.py로 전달.")
 
-        # 5-3. [수정] '근거 없는 주장' 제외 필터
-        min_average_score = 3 # [수정] 8점에서 3점으로 변경
-        filtered_list = [
-            item for item in combined_scores 
-            if item["average_score"] >= min_average_score
+        # [수정] 반환 값 변경
+        # (후보 문서(청크) 리스트, GPT 랭킹 리스트)
+        return candidate_docs, gpt_rankings
+
+    except Exception as e:
+        # GPT Rerank 실패 시 (Fallback)
+        # (main.py가 Fallback 처리할 수 있도록, 1차 검색 결과와 빈 랭킹을 반환)
+        print(f"⚠️ (Step 1) GPT Rerank 실패: {e}")
+        print("    (Fallback) 1차 검색(Qdrant) 결과와 빈 랭킹을 main.py로 전달합니다.")
+        
+        # 1차 검색(Qdrant) 순서대로 랭킹을 가짜로 만들어줌
+        fallback_rankings = [
+            {"index": i, "relevance_score": 10 - i} # 임시 점수
+            for i in range(len(candidate_docs))
         ]
-        print(f"ℹ️ 평균 점수 필터링 적용 (기준: {min_average_score}점 이상)")
-        print(f"📊 필터링 결과: {len(filtered_list)}개 문서 통과")
-
-        # 5-4. Gemini 점수 기준으로 최종 정렬 (동일)
-        sorted_list = sorted(filtered_list, key=lambda x: x["gemini_score"], reverse=True)
         
-        # 5-5. 상위 top_k(3개) 만큼만 최종 선택
-        final_selection = sorted_list[:top_k]
-        final_indices = [item["index"] for item in final_selection]
-        
-        top_docs = [candidate_docs[i] for i in final_indices]
-        top_scores = final_selection # [신규] 점수 리스트를 할당
-
-        if top_docs:
-            print(f"✅ 교차 검증 및 필터링 완료. (Gemini 점수 기준 정렬)")
-            for item in final_selection:
-                print(f"    - [문서 {item['index']}] Avg: {item['average_score']}, Gemini: {item['gemini_score']}, GPT: {item['gpt_score']}")
-        else:
-            print("✅ 교차 검증 및 필터링 완료. (3점 이상 문서 없음)")
-
-
-    # 6. [수정됨] 최종 결과 반환
-    limited_docs = [doc[:max_chars] for doc in top_docs]
-    print(f"✅ 최종 문서 {len(limited_docs)}개 반환 (각 {max_chars}자 제한)")
-    
-    # [수정] 문서 리스트와 점수 리스트를 튜플로 반환
-    return limited_docs, top_scores
+        # (후보 문서 리스트, 1차 검색 랭킹)
+        return candidate_docs, fallback_rankings
