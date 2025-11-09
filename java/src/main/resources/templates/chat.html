@@ -5,98 +5,44 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>AI 금융 챗봇</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            background-color: #f4f4f4;
-            margin: 0;
-        }
-        .chat-container {
-            width: 600px;
-            height: 700px;
-            background: white;
-            box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
-            border-radius: 10px;
-            display: flex;
-            flex-direction: column;
-            position: relative;
-            overflow: hidden;
-            padding-top: 50px;
-        }
-        .logout-button {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            padding: 8px 12px;
-            border: none;
-            background: #dc3545;
-            color: white;
-            font-size: 14px;
-            cursor: pointer;
-            border-radius: 5px;
-            z-index: 10;
-        }
-        .logout-button:hover {
-            background: #c82333;
-        }
-        .chat-box {
-            flex-grow: 1;
-            overflow-y: auto;
-            padding: 15px;
-            border-bottom: 1px solid #ccc;
-        }
-        .chat-input {
-            display: flex;
-            padding: 15px;
-            border-top: 1px solid #ccc;
-        }
-        input {
-            flex: 1;
-            padding: 12px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            font-size: 16px;
-        }
-        button {
-            padding: 12px 15px;
-            border: none;
-            background: #007bff;
-            color: white;
-            font-size: 16px;
-            cursor: pointer;
-            border-radius: 5px;
-            margin-left: 10px;
-        }
-        button:hover {
-            background: #0056b3;
-        }
-        .user-message {
-            text-align: right;
-            background-color: #cce5ff;
-            color: #003366;
-            padding: 10px;
-            border-radius: 10px;
-            margin-left: auto;
-            margin-bottom: 16px;
-            max-width: 75%;
-            display: block;   /* ✅ */
-            clear: both;      /* ✅ */
-        }
+        /* ... (기존 스타일 유지) ... */
+        body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f4f4f4; margin: 0; }
+        .chat-container { width: 600px; height: 700px; background: white; box-shadow: 0 0 15px rgba(0, 0, 0, 0.2); border-radius: 10px; display: flex; flex-direction: column; position: relative; overflow: hidden; padding-top: 50px; }
+        .logout-button { position: absolute; top: 10px; right: 10px; padding: 8px 12px; border: none; background: #dc3545; color: white; font-size: 14px; cursor: pointer; border-radius: 5px; z-index: 10; }
+        .logout-button:hover { background: #c82333; }
+        .chat-box { flex-grow: 1; overflow-y: auto; padding: 15px; border-bottom: 1px solid #ccc; }
+        .chat-input { display: flex; padding: 15px; border-top: 1px solid #ccc; }
+        input { flex: 1; padding: 12px; border: 1px solid #ccc; border-radius: 5px; font-size: 16px; }
+        button { padding: 12px 15px; border: none; background: #007bff; color: white; font-size: 16px; cursor: pointer; border-radius: 5px; margin-left: 10px; }
+        button:hover { background: #0056b3; }
+        .user-message { text-align: right; background-color: #cce5ff; color: #003366; padding: 10px; border-radius: 10px; margin-left: auto; margin-bottom: 16px; max-width: 75%; display: block; clear: both; }
+        .bot-message { text-align: left; background-color: #f1f1f1; color: #222; padding: 10px; border-radius: 10px; margin-right: auto; margin-bottom: 16px; max-width: 75%; display: block; clear: both; }
 
-        .bot-message {
+        /* [신규] 로딩 애니메이션 스타일 */
+        .loading-message {
             text-align: left;
-            background-color: #f1f1f1;
-            color: #222;
+            background-color: #e0e0e0;
+            color: #555;
             padding: 10px;
             border-radius: 10px;
             margin-right: auto;
             margin-bottom: 16px;
             max-width: 75%;
-            display: block;   /* ✅ */
-            clear: both;      /* ✅ */
+            display: none; /* 초기에는 숨김 */
+        }
+        .loading-dots span {
+            animation: blink 1s infinite steps(1);
+        }
+        .loading-dots span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+        .loading-dots span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+        @keyframes blink {
+            0% { opacity: 0.2; }
+            20% { opacity: 1; }
+            100% { opacity: 0.2; }
         }
     </style>
 </head>
@@ -104,7 +50,11 @@
 
 <div class="chat-container">
     <button class="logout-button" onclick="logout()">로그아웃</button>
-    <div class="chat-box" id="chatBox"></div>
+    <div class="chat-box" id="chatBox">
+        <!-- [신규] 로딩 메시지를 위한 div --><div id="loadingMessage" class="loading-message">
+        <strong>챗봇:</strong> 생각 중<span class="loading-dots"><span>.</span><span>.</span><span>.</span></span>
+    </div>
+    </div>
     <div class="chat-input">
         <input type="text" id="messageInput" placeholder="메시지를 입력하세요..." autocomplete="off"/>
         <button id="sendButton">전송</button>
@@ -115,7 +65,21 @@
     const input = document.getElementById("messageInput");
     const chatBox = document.getElementById("chatBox");
     const sendButton = document.getElementById("sendButton");
+    const loadingMessage = document.getElementById("loadingMessage"); // [신규] 로딩 메시지 엘리먼트
     let sending = false;
+
+    const GREETING_MESSAGE = `
+안녕하세요, 대출 AI 챗봇입니다. 필요한 대출에 대한 질문을 해주세요!
+
+📍 참고: 주변 은행 지점을 확인하려면 아래처럼 질문해 주세요.
+→ '근처 국민은행 알려줘', '근처 하나은행 알려줘', '근처 우리은행 알려줘'
+(정확히 일치해야 지도 기능이 활성화됩니다.)
+`.trim().replace(/\n/g, "<br>");
+
+    window.onload = function() {
+        chatBox.innerHTML += `<div class="bot-message"><strong>챗봇:</strong> ${GREETING_MESSAGE}</div>`;
+        chatBox.scrollTop = chatBox.scrollHeight; // 스크롤 자동 내림
+    };
 
     function sendMessage() {
         if (sending) return;
@@ -129,14 +93,24 @@
 
         chatBox.innerHTML += `<div class="user-message"><strong>나:</strong> ${message}</div>`;
         input.value = "";
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        // [신규] 로딩 메시지 표시
+        loadingMessage.style.display = 'block';
+        chatBox.scrollTop = chatBox.scrollHeight; // 로딩 메시지 보인 후 스크롤
+
+
+        const requestBody = {
+            question: message,
+            allowed_banks: null,
+            allowed_loan_types: null
+        };
 
         fetch("/api/ask", {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
+            headers: { "Content-Type": "application/json" },
             credentials: "include",
-            body: JSON.stringify({ question: message })
+            body: JSON.stringify(requestBody)
         })
             .then(response => {
                 if (!response.ok) throw new Error("서버 응답 오류");
@@ -155,14 +129,16 @@
                 chatBox.innerHTML += `<div class="bot-message" style="color:red;"><strong>오류:</strong> 서버 통신 실패</div>`;
             })
             .finally(() => {
+                // [신규] 로딩 메시지 숨김
+                loadingMessage.style.display = 'none';
                 sending = false;
+                chatBox.scrollTop = chatBox.scrollHeight;
             });
     }
 
-    // Enter 키 이벤트 (중복 방지)
     input.addEventListener("keydown", function(event) {
         if (event.key === "Enter") {
-            event.preventDefault();  // Enter 기본 동작 막기
+            event.preventDefault();
             sendMessage();
         }
     });
@@ -170,16 +146,10 @@
     sendButton.addEventListener("click", sendMessage);
 
     function logout() {
-        fetch("/logout", {
-            method: "POST",
-            credentials: "include"
-        })
+        fetch("/logout", { method: "POST", credentials: "include" })
             .then(response => {
-                if (response.ok) {
-                    window.location.href = "/login";
-                } else {
-                    alert("로그아웃 실패");
-                }
+                if (response.ok) window.location.href = "/login";
+                else alert("로그아웃 실패");
             })
             .catch(error => console.error("Logout error:", error));
     }

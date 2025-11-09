@@ -343,11 +343,6 @@ def _rerank_with_gpt(query: str, documents: list[str]) -> List[Dict]:
         print(f"⚠️ _rerank_with_gpt 중 오류: {e}")
         raise e # 이 오류는 Step 1의 핵심이므로 main.py로 전파
 
-# ==================================
-# 6️⃣ LLM as Judge (Gemini) - [삭제됨]
-# ==================================
-# (이 작업은 이제 main.py (Step 2)에서 수행됩니다)
-
 
 # ========================================
 # 7️⃣ [수정됨] 검색 함수 (Step 1: GPT Rerank)
@@ -357,7 +352,6 @@ def search_similar_docs(
     query: str,
     top_k: int = 3,
     rerank_candidates_count: int = 6, # 1차 검색 후보 수
-    max_chars: int = 1500, # (이 매개변수는 이제 main.py에서만 의미 있음)
     allowed_types: List[str] = None, # 예: ["sinyoung", "dambo"]
     allowed_banks: List[str] = None  # 예: ["우리은행", "신한은행"]
 ) -> Tuple[List[str], List[Dict]]:
