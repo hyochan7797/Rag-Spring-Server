@@ -10,6 +10,7 @@ COPY gradle gradle
 COPY build.gradle .
 COPY settings.gradle .
 
+RUN apt-get update && apt-get install -y dos2unix && dos2unix gradlew
 # 4️⃣ 소스 복사 및 빌드
 COPY src src
 RUN chmod +x gradlew && ./gradlew clean bootJar -x test

@@ -1,176 +1,185 @@
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from pydantic import BaseModel
 import google.generativeai as genai
 import os
-import json # [신규] Gemini의 JSON 응답 파싱
-from typing import List # [신규] 타입 힌트
-
+import json
+from typing import List, Dict, Optional
+import re
+from typing import List, Dict, Optional, Union
 # 1. RAG 파이프라인 (GPT Rerank 모듈) 임포트
 from rag_pipeline import search_similar_docs 
 from fastapi.middleware.cors import CORSMiddleware
 
+# =========================================
+# [중요] FastAPI 앱 초기화
+# =========================================
 app = FastAPI()
 chat_histories = {}
 
-# 2. Gemini Client 초기화 (Judge + Generate 용)
-try:
-    if os.getenv("GOOGLE_API_KEY"):
-        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        print("✅ (main.py) Gemini Judge+Generate 모델 설정 완료.")
-    else:
-        print("⚠️ (main.py) GOOGLE_API_KEY가 없습니다.")
-except Exception as e:
-    print(f"⚠️ (main.py) Gemini 설정 실패: {e}")
+# --- [개선된] 자동 필터링 엔진 (정규표현식 기반) ---
+BANK_PATTERNS = {
+    r"우리\s*은행": "우리은행",
+    r"신한\s*은행": "신한은행",
+    r"국민\s*은행": "국민은행",
+    r"kb\s*은행": "국민은행",
+    r"하나\s*은행": "하나은행",
+    r"기업\s*은행": "기업은행",
+}
 
-# 3. [신규] Gemini Judge+Generate 모델 정의
+TYPE_PATTERNS = {
+    r"신용\s*대출": "sinyoung",
+    r"마이너스\s*통장": "sinyoung",
+    r"마통": "sinyoung",
+    r"담보\s*대출": "dambo",
+    r"주택\s*담보": "dambo",
+    r"주담대": "dambo",
+    r"아파트\s*담보": "dambo",
+    r"전세\s*자금": "dambo",
+    r"전세\s*대출": "dambo"
+}
+
+def extract_filters_from_query(query: str):
+    """
+    [개선] 문맥을 고려하여 더 스마트하게 필터를 추출합니다.
+    """
+    extracted_banks = []
+    extracted_types = []
+
+    # 1. 은행 키워드 검색
+    for pattern, bank_name in BANK_PATTERNS.items():
+        if re.search(pattern, query, re.IGNORECASE):
+            if bank_name not in extracted_banks:
+                extracted_banks.append(bank_name)
+    
+    # 2. 대출 종류 키워드 검색
+    for pattern, loan_type in TYPE_PATTERNS.items():
+        if re.search(pattern, query, re.IGNORECASE):
+            if loan_type not in extracted_types:
+                extracted_types.append(loan_type)
+
+    # 3. '직장인' 키워드 문맥 처리 (담보가 없을 때만 신용대출로 간주)
+    if re.search(r"직장인", query, re.IGNORECASE):
+        if "dambo" not in extracted_types:
+             if "sinyoung" not in extracted_types:
+                 extracted_types.append("sinyoung")
+
+    return extracted_banks if extracted_banks else None, \
+           extracted_types if extracted_types else None
+
+
+# 2. Gemini Client 초기화
 try:
-    # Gemini가 JSON 응답을 반환하도록 설정
-    gemini_json_config = genai.GenerationConfig(response_mime_type="application/json")
-    generation_model = genai.GenerativeModel(
-        'gemini-2.5-flash', # 형님이 찾아내신 2.5 flash 모델
-        generation_config=gemini_json_config
-    )
-    print("✅ (main.py) Gemini 'gemini-2.5-flash' (JSON 모드) 초기화 완료.")
+    google_api_key = os.getenv("GOOGLE_API_KEY")
+    if not google_api_key:
+        # 로컬 개발을 위한 .env 로드 시도
+        from dotenv import load_dotenv
+        load_dotenv("/app/.env")
+        google_api_key = os.getenv("GOOGLE_API_KEY")
+        
+    if google_api_key:
+        genai.configure(api_key=google_api_key)
+        generation_model = genai.GenerativeModel('gemini-2.5-flash')
+        print("✅ [main.py] Gemini(답변 생성용) 설정 완료.")
+    else:
+         print("⚠️ [main.py] GOOGLE_API_KEY 없음.")
+         generation_model = None
 except Exception as e:
-    print(f"⚠️ (main.py) Gemini 'gemini-2.5-flash' 모델 초기화 실패: {e}")
+    print(f"⚠️ [main.py] Gemini 초기화 오류: {e}")
     generation_model = None
 
-# 4. [수정됨] FastAPI 요청/응답 모델
 class ChatRequest(BaseModel):
-    user_id: int
+    user_id: Union[str, int]
     question: str
-    allowed_types: List[str] = [] # (예: ["신용대출"])
-    allowed_banks: List[str] = [] # (예: ["우리은행"])
+    allowed_banks: Optional[List[str]] = None
+    allowed_loan_types: Optional[List[str]] = None
 
-class ChatResponse(BaseModel):
-    answer: str
-
-# 5. [신규] Gemini 프롬프트 헬퍼 (Step 2)
-def build_gemini_judge_prompt(query: str, documents: List[str], gpt_scores: List[dict]) -> str:
-    """
-    [Step 2] Gemini에게 (A)교차 검증, (B)답변 생성, (C)점수 코멘트 생성을
-    한 번에 JSON으로 요청하는 프롬프트를 생성합니다.
-    """
-    
-    # GPT 점수 리스트를 [문서 N]에 매핑
-    doc_with_gpt_score_str = ""
-    for i, doc in enumerate(documents):
-        # gpt_scores 리스트에서 현재 인덱스(i)에 해당하는 점수 찾기
-        gpt_score_item = next((item for item in gpt_scores if item.get("index") == i), None)
-        gpt_score = gpt_score_item.get("relevance_score") if gpt_score_item else "N/A"
-        
-        doc_with_gpt_score_str += f"\n\n[문서 {i} (GPT 점수: {gpt_score})]:\n{doc}"
-
-    system_prompt = f"""
-당신은 '금융 상품 전문가'이자 'RAG 파이프라인 평가자'입니다.
-당신의 임무는 (A)GPT의 평가를 교차 검증하고, (B)3점 미만 문서를 제거하고, (C)최종 답변을 생성하고, (D)점수 코멘트를 JSON으로 반환하는 것입니다.
-
-[지시사항]
-1.  아래 [후보 문서 목록]을 [사용자 질문]과 비교하여 **당신(Gemini)의 'gemini_score' (1~10점)를 매기세요.**
-2.  당신의 'gemini_score'와 [문서]에 적힌 'GPT 점수'의 **평균('average_score')을 계산하세요.** (GPT 점수가 N/A이면 gemini_score를 평균으로 사용)
-3.  'average_score'가 **3점 미만인 문서는 '근거 없는 주장'으로 간주하여 필터링**합니다.
-4.  **필터링(3점 이상)을 통과한 문서들**만을 기반으로 [사용자 질문]에 대한 [final_answer]를 생성하세요.
-5.  필터링(3점 이상)을 통과한 문서들의 'average_score' 중 **가장 높은 점수**를 기준으로 [score_comment]를 생성하세요.
-    - 9~10점: "이 답변은 제공된 문서와 정확도 높게 일치합니다."
-    - 7~8점: "이 답변은 대부분 문서의 내용을 기반으로 합니다."
-    - 3~6점: "이 답변은 일부 문서의 내용을 기반으로 하나, 일부는 근거가 부족할 수 있습니다."
-    - (3점 미만 문서는 이미 필터링되어 답변에 사용되지 않음)
-    - (필터링 통과한 문서가 없으면, '참고할 만한 문서를 찾지 못했습니다.' 코멘트)
-
-[반환 형식]
-반드시 다음 구조의 JSON 객체 하나만 반환하세요:
-{{
-  "final_answer": "사용자 질문에 대한 최종 답변입니다. (3점 이상 문서 기반)",
-  "score_comment": "가장 높은 평균 점수에 대한 코멘트입니다."
-}}
-
----
-[사용자 질문]:
-{query}
-
-[후보 문서 목록 (GPT 평가 포함)]:
-{doc_with_gpt_score_str}
-"""
-    return system_prompt
-
-# 6. [수정됨] Chat 엔드포인트 (2-Step RAG)
-@app.post("/chat", response_model=ChatResponse)
-async def ask_chat(request: ChatRequest):
-    user_id = request.user_id
-    question = request.question
-
-    if not generation_model:
-        return ChatResponse(answer="죄송합니다. 답변 생성기 모델이 초기화되지 않았습니다.")
-
-    # 사용자별 대화 히스토리 관리
-    if user_id not in chat_histories:
-        chat_histories[user_id] = []
-    history = chat_histories[user_id]
-    history.append({"role": "user", "content": question})
-
-    # --- [Step 1] GPT Rerank (LLM 호출 1) ---
-    try:
-        # (문서 리스트, GPT 점수 리스트)를 반환받음
-        candidate_docs, gpt_scores = search_similar_docs(
-            history,
-            question,
-            top_k=3, # Gemini에게 전달할 최대 문서 개수
-            allowed_types=request.allowed_types,
-            allowed_banks=request.allowed_banks
-        )
-    except Exception as e:
-        print(f"🔥 /chat 엔드포인트에서 search_similar_docs 호출 중 치명적 오류: {e}")
-        return ChatResponse(answer="죄송합니다. 문서를 검색하는 중 오류가 발생했습니다.")
-
-    if not candidate_docs:
-        # RAG 파이프라인이 1차 검색(Qdrant)에서 문서를 찾지 못한 경우
-        print("ℹ️ (main.py) RAG 1차 검색 결과 0개.")
-        answer = "죄송합니다. 관련 상품 정보를 찾을 수 없습니다. (필터 조건 확인)"
-        history.append({"role": "assistant", "content": answer})
-        return ChatResponse(answer=answer)
-
-    # --- [Step 2] Gemini (Judge + Generate) (LLM 호출 2) ---
-    try:
-        # Gemini에게 (후보 문서 + GPT 점수)를 전달하여 '2차 평가 + 답변 생성' 요청
-        final_prompt = build_gemini_judge_prompt(question, candidate_docs, gpt_scores)
-        
-        response = generation_model.generate_content(final_prompt)
-        
-        # Gemini가 반환한 JSON 파싱
-        response_json = json.loads(response.text)
-        
-        final_answer = response_json.get("final_answer", "답변을 생성하지 못했습니다.")
-        score_comment = response_json.get("score_comment", "점수 코멘트를 생성하지 못했습니다.")
-        
-        # 최종 답변에 점수 코멘트 덧붙이기
-        answer_with_comment = f"{final_answer}\n\n[신뢰도: {score_comment}]"
-        
-        print(f"💬 (main.py) Step 2 (Gemini Judge+Generate) 완료.")
-
-    except Exception as e:
-        print(f"⚠️ (main.py) Step 2 (Gemini Judge+Generate) 중 오류: {e}")
-        # Step 2 실패 시, Step 1의 결과라도 활용 (Fallback)
-        context_str = "\n\n---\n\n".join(candidate_docs)
-        answer_with_comment = f"""
-죄송합니다. 답변을 생성하는 중 오류가 발생했습니다.
-참고로, GPT-3.5가 1차로 평가한 관련 문서는 다음과 같습니다:
-{context_str}
-"""
-
-    # 대화 저장
-    history.append({"role": "assistant", "content": answer_with_comment})
-    return ChatResponse(answer=answer_with_comment)
-
-# CORS 설정 (이전과 동일)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-if __name__ == "__main__":
-    print("🚀 FastAPI 서버(2-Step RAG)를 http://127.0.0.1:8000 에서 시작합니다.")
-    # (실행 시: uvicorn main:app --host 0.0.0.0 --port 8000)
+@app.middleware("http")
+async def add_no_cache_header(request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+@app.post("/chat")
+def ask_chat(query: ChatRequest):
+    user_id = str(query.user_id)
+    question = query.question
+
+    # --- 자동 필터링 적용 ---
+    final_banks = query.allowed_banks
+    final_types = query.allowed_loan_types
+
+    if final_banks is None and final_types is None:
+         auto_banks, auto_types = extract_filters_from_query(question)
+         if final_banks is None: final_banks = auto_banks
+         if final_types is None: final_types = auto_types
+         
+         if auto_banks or auto_types:
+             print(f"🤖 자동 필터 적용: 은행={final_banks}, 종류={final_types}")
+
+    # --- 대화 히스토리 관리 ---
+    if user_id not in chat_histories:
+        chat_histories[user_id] = []
+    history = chat_histories[user_id]
+    history.append({"role": "user", "content": question})
+
+    # --- Step 1: RAG 파이프라인 호출 (검색 + 1차 평가) ---
+    top_docs, top_scores = search_similar_docs(
+        history_list=history,
+        query=question,
+        allowed_banks=final_banks,
+        allowed_types=final_types
+    )
+
+    if not top_docs:
+        return {"answer": "죄송합니다. 해당 조건에 맞는 대출 상품 정보를 찾을 수 없습니다."}
+
+    # --- Step 2: Gemini 호출 (교차 검증 + 최종 답변 생성) ---
+    context_str = ""
+    for i, (doc, gpt_score) in enumerate(zip(top_docs, top_scores)):
+        context_str += f"\n[청크 {i}] (GPT점수: {gpt_score}점)\n{doc}\n"
+
+    system_prompt = f"""
+당신은 유능한 은행원입니다. 고객의 질문에 친절하게 답변해주세요.
+반드시 아래 [제공된 청크]만을 기반으로 답변해야 합니다.
+[제공된 청크]에 없는 내용은 절대로 지어내지 말고, "죄송하지만 제가 가진 정보로는 확인이 어렵습니다"라고 솔직하게 말해주세요.
+
+---
+[중요] 답변 작성 규칙 (2-Step Verification):
+1. 당신도 이 청크들이 질문과 얼마나 관련이 있는지 1~10점으로 평가하세요 (Gemini 점수).
+2. [GPT점수]와 당신의 [Gemini 점수]의 평균을 계산하세요.
+3. 평균 점수가 3점 미만인 청크는 '근거 없는 정보'로 간주하고 답변에서 완전히 배제하세요.
+4. 답변의 맨 마지막에 반드시 [AI 신뢰도 코멘트]를 한 줄 추가해주세요:
+   - 평균 9~10점 청크 사용 시: "✨ AI 신뢰도: 매우 높음 (확실한 문서 기반)"
+   - 평균 7~8점 청크 사용 시: "✅ AI 신뢰도: 높음 (관련 문서 기반)"
+   - 평균 3~6점 청크 사용 시: "⚠️ AI 신뢰도: 보통 (일부 관련성 낮은 정보 포함 가능)"
+   - 모든 청크가 3점 미만일 시: "❌ AI 신뢰도: 낮음 (관련 정보 없음)" 이라고만 답변하고 내용은 출력하지 마세요.
+
+[제공된 청크]:
+{context_str}
+"""
+
+    messages = [
+        {"role": "user", "parts": [system_prompt + "\n\n고객 질문: " + question]}
+    ]
+
+    try:
+        response = generation_model.generate_content(messages)
+        final_answer = response.text
+        
+        history.append({"role": "model", "content": final_answer})
+        return {"answer": final_answer}
+
+    except Exception as e:
+        print(f"⚠️ Gemini 답변 생성 중 오류: {e}")
+        return {"answer": "죄송합니다. 답변을 생성하는 도중 오류가 발생했습니다."}
