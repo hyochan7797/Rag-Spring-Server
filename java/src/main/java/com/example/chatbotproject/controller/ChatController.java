@@ -17,13 +17,7 @@ public class ChatController {
 
     private final FastApiService fastApiService;
     private final ChatHistoryRepository chatHistoryRepository;
-    private static final String GREETING_MESSAGE = """
-안녕하세요, 대출 AI 챗봇입니다. 필요한 대출에 대한 질문을 해주세요!
 
-📍 참고: 주변 은행 지점을 확인하려면 아래처럼 질문해 주세요.
-→ '근처 국민은행 알려줘', '근처 하나은행 알려줘', '근처 우리은행 알려줘'
-(정확히 일치해야 지도 기능이 활성화됩니다.)
-""";
 
     @PostMapping("/ask")
     public ResponseEntity<Map<String, String>> askRag(@RequestBody Map<String, String> body, HttpSession session) {
@@ -37,11 +31,7 @@ public class ChatController {
         if (question == null || question.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "질문이 비어 있습니다."));
         }
-        // ✅ 첫 접속 시 인삿말 출력
-        if (session.getAttribute("greeted") == null) {
-            session.setAttribute("greeted", true);
-            return ResponseEntity.ok(Map.of("answer", GREETING_MESSAGE));
-        }
+
 
         // 📍 챗봇 첫 인사말 세션으로 확인
         boolean greeted = Boolean.TRUE.equals(session.getAttribute("greeted"));
