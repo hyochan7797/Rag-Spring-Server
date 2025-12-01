@@ -4,7 +4,6 @@ import chardet
 from tqdm import tqdm
 from dotenv import load_dotenv
 import os
-from openai import OpenAI
 from qdrant_client import QdrantClient
 from collections import Counter
 from qdrant_client.http.models import FieldCondition, Filter, MatchValue, MatchAny
@@ -13,7 +12,15 @@ from langchain_openai import OpenAIEmbeddings
 import json
 import google.generativeai as genai 
 from typing import List, Tuple, Dict, Optional
+# [NEW] 로컬 AI 모델 준비
+import torch
+import asyncio
+from sentence_transformers import CrossEncoder
 
+print("🚀 로컬 리랭커(BGE-Reranker) 모델 로딩 중...")
+device = "cuda" if torch.cuda.is_available() else "cpu"
+# 금융 문서는 기니까 max_length=1024로 설정
+reranker_model = CrossEncoder('BAAI/bge-reranker-v2-m3', max_length=1024, device=device)
 # =KST======================
 # 1️⃣ 환경 설정 로드
 # =======================
@@ -25,7 +32,6 @@ if os.path.exists(dotenv_path):
 else:
     print("⚠️ .env 파일을 찾을 수 없습니다. OS 환경 변수를 사용합니다.")
 
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 api_key = os.getenv("OPENAI_API_KEY")
 qdrant_url = os.getenv("QDRANT_URL", "http://qdrant:6333")
 collection_name = os.getenv("COLLECTION_NAME", "loan_docs")
@@ -162,42 +168,23 @@ try:
 except Exception as e:
     print(f"⚠️ Qdrant 초기화 오류: {e}")
     vectorstore = None
-
-# =======================
-# 5️⃣ Rerank 함수 (GPT-3.5)
-# =======================
-def _rerank_with_gpt(query: str, documents: List[str]) -> List[Dict]:
-    if not documents: return []
-    documents_str = ""
-    for i, doc in enumerate(documents): documents_str += f"\n\n[문서 {i}]:\n{doc}" 
+# [변경 후 함수]
+def _rerank_local(query: str, documents: List[str], top_k: int = 3) -> Tuple[List[str], List[float]]:
+    if not documents: return [], []
     
-    system_prompt = """
-당신은 '관련성 평가 전문가'입니다.
-주어진 '사용자 쿼리'에 대해 '문서 목록'이 얼마나 적절한지 평가하세요.
-반드시 "rankings"라는 단일 키를 가진 JSON 객체를 반환해야 합니다.
-"rankings" 값은 다음 객체들의 리스트입니다:
-{"index": 문서인덱스(int), "relevance_score": 관련성점수(1~10, int)}
-"""
-    user_prompt = f"[쿼리]: {query}\n[문서 목록]:{documents_str}\nJSON을 반환하세요."
-
-    try:
-        response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo-1106", 
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.0
-        )
-        data = json.loads(response.choices[0].message.content)
-        rankings = data.get("rankings", [])
-        return sorted(rankings, key=lambda x: x["relevance_score"], reverse=True)
-    except Exception as e:
-        print(f"⚠️ GPT Rerank 오류: {e}")
-        return [{"index": i, "relevance_score": 5} for i in range(len(documents))]
-
+    # AI가 읽기 편하게 [질문, 답변] 쌍으로 만듦
+    model_inputs = [[query, doc] for doc in documents]
+    
+    # 0.1초 만에 점수 계산 (인터넷 연결 X)
+    scores = reranker_model.predict(model_inputs)
+    
+    # 점수 높은 순서대로 정렬해서 상위 3개만 리턴
+    results = sorted(zip(scores, documents), key=lambda x: x[0], reverse=True)
+    return [doc for _, doc in results[:top_k]], [score for score, _ in results[:top_k]]
 # =======================
 # 7️⃣ 검색 함수 (필터 키 수정됨!)
 # =======================
-def search_similar_docs(
+async def search_similar_docs(
     history_list, query, allowed_banks: Optional[List[str]] = None, allowed_types: Optional[List[str]] = None
 ) -> Tuple[List[str], List[float]]:
     
@@ -226,7 +213,7 @@ def search_similar_docs(
     
     try:
         search_results = vectorstore.similarity_search_with_score(
-            full_query, k=15, filter=qdrant_filter
+            full_query, k=30, filter=qdrant_filter
         )
         print(f"🚚 1차 검색 결과: {len(search_results)}개 문서 발견")
     except Exception as e:
@@ -253,14 +240,14 @@ def search_similar_docs(
         return [], []
 
     candidate_docs = [doc.page_content for doc, _ in search_results]
-    gpt_rankings = _rerank_with_gpt(full_query, candidate_docs)
+
     
-    final_docs = []
-    final_scores = []
-    for rank in gpt_rankings:
-        idx = rank["index"]
-        if idx < len(candidate_docs):
-            final_docs.append(candidate_docs[idx])
-            final_scores.append(rank["relevance_score"])
-            
+    print("⚡ 리랭킹 수행 중 (Local BGE Model)...")
+    
+    # asyncio.to_thread를 사용하여 무거운 계산 작업을 메인 루프 밖으로 뺍니다.
+    final_docs, final_scores = await asyncio.to_thread(
+        _rerank_local, full_query, candidate_docs, top_k=3
+    )
+    
     return final_docs, final_scores
+

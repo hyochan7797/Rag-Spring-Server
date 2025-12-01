@@ -45,8 +45,9 @@ services:
       MYSQL_DATABASE: finance_db
       MYSQL_USER: hyochan
       MYSQL_PASSWORD: 131890
-      QDRANT_URL: http://qdrant:6333        # ✅ 추가
-      COLLECTION_NAME: loan_docs            # ✅ 추가
+      QDRANT_URL: http://qdrant:6333
+      COLLECTION_NAME: loan_docs
+      HF_HOME: /root/.cache/huggingface
     depends_on:
       finance-mysql:
         condition: service_healthy
@@ -54,6 +55,8 @@ services:
         condition: service_started
     volumes:
       - /Users/hyochan/Desktop/Project/rag/python/app/data:/app/data
+      - /Users/hyochan/Desktop/Project/rag/python/hf_cache:/root/.cache/huggingface
+
 
   spring:
     build:
