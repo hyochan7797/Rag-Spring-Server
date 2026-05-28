@@ -256,16 +256,21 @@ async def search_similar_docs(
     query: str,
     allowed_banks: Optional[List[str]] = None,
     allowed_types: Optional[List[str]] = None,
+    rewritten_query: Optional[str] = None,
 ) -> Tuple[List[str], List[float]]:
 
     if vectorstore is None:
         print("⚠️ 벡터스토어 미준비 상태 — /admin/refresh 로 데이터를 먼저 적재하세요.")
         return [], []
 
-    recent_context = " ".join(
-        msg["content"] for msg in history_list[-2:] if msg["role"] == "user"
-    )
-    full_query = (recent_context + " " + query).strip()
+    if rewritten_query:
+        # 쿼리 재작성이 이미 대화 맥락을 반영했으므로 이중 확장 방지
+        full_query = rewritten_query
+    else:
+        recent_context = " ".join(
+            msg["content"] for msg in history_list[-2:] if msg["role"] == "user"
+        )
+        full_query = (recent_context + " " + query).strip()
 
     filters = []
     if allowed_banks:

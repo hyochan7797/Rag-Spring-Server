@@ -53,7 +53,7 @@ def extract_filters_from_query(query: str):
         if re.search(pattern, query, re.IGNORECASE):
             if bank_name not in extracted_banks:
                 extracted_banks.append(bank_name)
-    
+
     # 2. 대출 종류 키워드 검색
     for pattern, loan_type in TYPE_PATTERNS.items():
         if re.search(pattern, query, re.IGNORECASE):
@@ -67,6 +67,45 @@ def extract_filters_from_query(query: str):
 
     return extracted_banks if extracted_banks else None, \
            extracted_types if extracted_types else None
+
+
+async def rewrite_query(question: str, history: list) -> str:
+    """
+    모호한 사용자 질문을 검색에 최적화된 쿼리로 변환.
+    - 대화 맥락(이전 user 메시지)을 반영하여 생략된 정보를 보완
+    - 검색에만 사용; 답변 생성은 원본 question을 유지
+    """
+    if generation_model is None:
+        return question
+
+    # 현재 질문 제외, 이전 user 메시지 최대 3개 추출
+    prev_user_msgs = [m["content"] for m in history if m["role"] == "user"]
+    context_str = " / ".join(prev_user_msgs[-4:-1]) if len(prev_user_msgs) > 1 else ""
+
+    prompt = f"""금융 대출 상품 검색 시스템의 검색 쿼리 최적화 전문가입니다.
+아래 [이전 대화]와 [현재 질문]을 분석하여, 벡터 DB와 BM25 키워드 검색에 최적화된 단일 검색 쿼리를 생성하세요.
+
+[변환 규칙]
+1. 모호한 표현을 구체적인 금융 용어로 변환 (예: "싼 곳" → "최저금리 대출", "빌리다" → "대출 신청")
+2. 이전 대화에서 언급된 은행명·대출종류·조건을 현재 질문에 자연스럽게 통합
+3. 검색 쿼리는 핵심 키워드 중심의 1~2문장
+4. 원래 질문의 의도를 반드시 유지할 것
+5. 한국어로만 출력
+
+[이전 대화]: {context_str if context_str else "없음"}
+[현재 질문]: {question}
+
+검색 쿼리만 출력 (설명·부연 없이):"""
+
+    try:
+        resp = await asyncio.to_thread(generation_model.generate_content, prompt)
+        rewritten = resp.text.strip().strip('"').strip("'")
+        if rewritten and rewritten != question:
+            print(f"🔄 쿼리 재작성: '{question}' → '{rewritten}'")
+            return rewritten
+    except Exception as e:
+        print(f"⚠️ 쿼리 재작성 실패, 원본 사용: {e}")
+    return question
 
 
 # Gemini Client 초기화
@@ -139,14 +178,17 @@ async def ask_chat(query: ChatRequest):
         history = chat_histories[user_id]
         history.append({"role": "user", "content": question})
 
-    # --- 3. RAG 파이프라인 호출 (검색 + 리랭킹) ---
-    # 여기서 돌아오는 top_docs는 이미 BGE-Reranker가 검증을 끝낸 상위 3개 문서입니다.
-    # top_scores는 리랭커가 매긴 점수입니다 (예: 2.5, -1.2 등)
+    # --- 3. 쿼리 재작성 (검색 품질 향상) ---
+    # 재작성된 쿼리는 검색에만 사용; 답변 생성은 원본 question 유지
+    rewritten = await rewrite_query(question, history)
+
+    # --- 4. RAG 파이프라인 호출 (검색 + 리랭킹) ---
     top_docs, top_scores = await search_similar_docs(
         history_list=history,
         query=question,
         allowed_banks=final_banks,
-        allowed_types=final_types
+        allowed_types=final_types,
+        rewritten_query=rewritten,
     )
 
     if not top_docs:
