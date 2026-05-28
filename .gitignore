@@ -47,5 +47,10 @@ Thumbs.db
 log/
 logs/
 *.log
-```
 
+# =========================
+# 🏗️ Build Artifacts
+# =========================
+java/build/
+**/build/reports/
+**/build/resources/
