@@ -4,6 +4,8 @@ FROM python:3.10-slim
 # 작업 디렉토리 설정
 WORKDIR /app
 
+ENV PYTHONUNBUFFERED=1
+
 # 필수 시스템 패키지 설치 (빌드 실패 방지)
 RUN apt-get update && apt-get install -y \
     gcc g++ make build-essential libssl-dev libffi-dev python3-dev git curl \

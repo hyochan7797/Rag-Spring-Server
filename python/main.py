@@ -1,16 +1,17 @@
 import uvicorn
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, Header, HTTPException
 from pydantic import BaseModel
 import google.generativeai as genai
 import os
 import json
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional, Union, Any
 import re
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio  
 # [중요] 아까 수정한 로컬 리랭커 포함된 검색 모듈 임포트
 # rag_pipeline.py 파일이 같은 폴더에 있어야 합니다.
-from rag_pipeline import search_similar_docs 
+from rag_pipeline import search_similar_docs, refresh_vectorstore
+from fss_crawler import crawl_all
 
 # =========================================
 # FastAPI 앱 초기화
@@ -92,6 +93,7 @@ class ChatRequest(BaseModel):
     question: str
     allowed_banks: Optional[List[str]] = None
     allowed_loan_types: Optional[List[str]] = None
+    history: Optional[List[Dict[str, str]]] = None  # Spring이 MySQL에서 꺼내 전달
 
 app.add_middleware(
     CORSMiddleware,
@@ -126,11 +128,16 @@ async def ask_chat(query: ChatRequest):
          if auto_banks or auto_types:
              print(f"🤖 자동 필터 적용: 은행={final_banks}, 종류={final_types}")
 
-    # --- 2. 대화 히스토리 관리 ---
-    if user_id not in chat_histories:
-        chat_histories[user_id] = []
-    history = chat_histories[user_id]
-    history.append({"role": "user", "content": question})
+    # --- 2. 대화 히스토리 ---
+    # Spring이 MySQL 히스토리를 실어 보내면 그걸 사용 (재시작해도 유지)
+    # 없으면 인메모리 fallback (로컬 단독 실행 시)
+    if query.history is not None:
+        history = list(query.history) + [{"role": "user", "content": question}]
+    else:
+        if user_id not in chat_histories:
+            chat_histories[user_id] = []
+        history = chat_histories[user_id]
+        history.append({"role": "user", "content": question})
 
     # --- 3. RAG 파이프라인 호출 (검색 + 리랭킹) ---
     # 여기서 돌아오는 top_docs는 이미 BGE-Reranker가 검증을 끝낸 상위 3개 문서입니다.
@@ -194,12 +201,55 @@ async def ask_chat(query: ChatRequest):
             
         final_response = final_answer + reliability_msg
 
-        history.append({"role": "model", "content": final_response})
+        # 인메모리 fallback 사용 중일 때만 응답 저장 (Spring 경유 시 MySQL에 저장됨)
+        if query.history is None:
+            history.append({"role": "model", "content": final_response})
         return {"answer": final_response}
 
     except Exception as e:
         print(f"⚠️ Gemini 답변 생성 중 오류: {e}")
         return {"answer": "죄송합니다. 답변을 생성하는 도중 오류가 발생했습니다."}
+
+@app.post("/admin/refresh")
+async def refresh_vectors(x_admin_key: str = Header(...)):
+    """FSS API에서 최신 대출 데이터를 수집해 Qdrant 벡터 갱신 (Spring Batch가 호출)"""
+    admin_key = os.getenv("ADMIN_API_KEY")
+    if not admin_key or x_admin_key != admin_key:
+        raise HTTPException(status_code=403, detail="인증 실패")
+
+    print("🚀 [admin/refresh] FSS 크롤링 시작...")
+    try:
+        new_docs, new_metas = await crawl_all()
+        if not new_docs:
+            return {"status": "error", "message": "수집된 데이터 없음"}
+
+        success = await refresh_vectorstore(new_docs, new_metas)
+        if success:
+            return {"status": "ok", "chunks": len(new_docs)}
+        else:
+            return {"status": "error", "message": "벡터 갱신 실패 — 로그 확인"}
+    except Exception as e:
+        print(f"⚠️ [admin/refresh] 오류: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.on_event("startup")
+async def startup_event():
+    import rag_pipeline
+    if rag_pipeline.vectorstore is None:
+        print("🚀 [startup] Qdrant 데이터 없음 — FSS API 초기 적재 시작...")
+        try:
+            docs, metas = await crawl_all()
+            if docs:
+                await refresh_vectorstore(docs, metas)
+                print(f"✅ [startup] 초기 적재 완료 ({len(docs)}개 청크)")
+            else:
+                print("⚠️ [startup] FSS API에서 데이터를 가져오지 못했습니다.")
+        except Exception as e:
+            print(f"⚠️ [startup] 초기 적재 실패: {e}")
+    else:
+        print("✅ [startup] 기존 Qdrant 데이터 재사용 — 크롤링 생략")
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

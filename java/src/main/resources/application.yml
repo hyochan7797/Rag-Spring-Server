@@ -1,8 +1,8 @@
 spring:
   datasource:
-    url: jdbc:mysql://db:3306/finance_db
-    username: hyochan
-    password: 131890
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/finance_db}
+    username: ${SPRING_DATASOURCE_USERNAME:app_user}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   jpa:
@@ -13,6 +13,18 @@ spring:
       hibernate:
         show_sql: true
 
+  batch:
+    jdbc:
+      initialize-schema: always   # Spring Batch 메타 테이블 자동 생성
+    job:
+      enabled: false              # 앱 시작 시 배치 자동 실행 방지
+
 server:
   port: 8080
 
+fastapi:
+  admin:
+    url: ${FASTAPI_ADMIN_URL:http://localhost:8000/admin/refresh}
+
+loan-refresh:
+  cron: ${LOAN_REFRESH_CRON:0 0 2 * * *}   # 기본: 매일 새벽 2시

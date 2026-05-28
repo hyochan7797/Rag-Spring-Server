@@ -1,17 +1,15 @@
-version: '3.9'
-
 services:
   finance-mysql:
     image: mysql:8
     container_name: finance-mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: 1234
-      MYSQL_DATABASE: finance_db
-      MYSQL_USER: hyochan
-      MYSQL_PASSWORD: 131890
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
-      - "3306:3306"
+      - "3308:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -32,21 +30,16 @@ services:
 
   fastapi:
     build:
-      context: /Users/hyochan/Desktop/Project/rag/python
+      context: ./python
     container_name: fastapi-app
     restart: always
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - ./python/.env
     environment:
-      MYSQL_HOST: finance-mysql
-      MYSQL_PORT: 3306
-      MYSQL_DATABASE: finance_db
-      MYSQL_USER: hyochan
-      MYSQL_PASSWORD: 131890
       QDRANT_URL: http://qdrant:6333
-      COLLECTION_NAME: loan_docs
+      COLLECTION_NAME: ${COLLECTION_NAME:-loan_docs}
       HF_HOME: /root/.cache/huggingface
     depends_on:
       finance-mysql:
@@ -54,22 +47,24 @@ services:
       qdrant:
         condition: service_started
     volumes:
-      - /Users/hyochan/Desktop/Project/rag/python/app/data:/app/data
-      - /Users/hyochan/Desktop/Project/rag/python/hf_cache:/root/.cache/huggingface
-
+      - ./python/app/data:/app/data
+      - hf_cache:/root/.cache/huggingface
 
   spring:
     build:
-      context: /Users/hyochan/Desktop/Project/rag/java
+      context: ./java
     container_name: spring-app
     restart: always
     ports:
       - "8080:8080"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:mysql://finance-mysql:3306/finance_db
-      SPRING_DATASOURCE_USERNAME: hyochan
-      SPRING_DATASOURCE_PASSWORD: 131890
+      SPRING_DATASOURCE_URL: jdbc:mysql://finance-mysql:3306/${MYSQL_DATABASE}
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_USER}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
       FASTAPI_URL: http://fastapi:8000/chat
+      FASTAPI_ADMIN_URL: http://fastapi:8000/admin/refresh
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      LOAN_REFRESH_CRON: ${LOAN_REFRESH_CRON:-0 0 2 * * *}
     depends_on:
       finance-mysql:
         condition: service_healthy
@@ -79,3 +74,4 @@ services:
 volumes:
   mysql_data:
   qdrant_storage:
+  hf_cache:

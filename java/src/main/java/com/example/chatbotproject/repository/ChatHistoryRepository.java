@@ -7,4 +7,5 @@ import java.util.List;
 
 public interface ChatHistoryRepository extends JpaRepository<ChatHistory, Long> {
     List<ChatHistory> findByUserIdOrderByTimestampDesc(int userId);
+    List<ChatHistory> findTop5ByUserIdOrderByTimestampDesc(Long userId);
 }
