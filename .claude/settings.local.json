@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch"
+      "WebSearch",
+      "Bash(grep -E \"sk-proj-[A-Za-z0-9_-]{20,}|AIzaSy[A-Za-z0-9_-]{30,}\")",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git checkout *)",
+      "Bash(git cherry-pick *)",
+      "Bash(git push *)"
     ]
   }
 }
