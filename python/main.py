@@ -12,6 +12,8 @@ import asyncio
 # rag_pipeline.py 파일이 같은 폴더에 있어야 합니다.
 from rag_pipeline import search_similar_docs, refresh_vectorstore
 from fss_crawler import crawl_all
+from query_expansion import expand_domain_synonyms
+from filter_extraction import extract_filters_from_query as shared_extract_filters_from_query
 
 # =========================================
 # FastAPI 앱 초기화
@@ -69,6 +71,31 @@ def extract_filters_from_query(query: str):
            extracted_types if extracted_types else None
 
 
+# Override legacy patterns with UTF-8 product categories used by the expanded FSS crawler.
+BANK_PATTERNS = {
+    r"우리\s*은행": "우리은행",
+    r"신한\s*은행": "신한은행",
+    r"국민\s*은행": "국민은행",
+    r"kb\s*은행|kb\s*국민": "국민은행",
+    r"하나\s*은행": "하나은행",
+    r"기업\s*은행": "기업은행",
+}
+
+TYPE_PATTERNS = {
+    r"신용\s*대출|개인\s*신용|마이너스\s*통장|마통": "sinyoung",
+    r"주택\s*담보|주담대|아파트\s*담보|아담대": "dambo_mortgage",
+    r"전세\s*자금|전세\s*대출": "dambo_jeonse",
+    r"정기\s*예금|예금": "deposit",
+    r"적금": "saving",
+    r"연금\s*저축": "annuity_saving",
+    r"금융\s*회사|은행\s*정보": "company",
+}
+
+
+# Use the UTF-8 shared extractor used by evaluation as well.
+extract_filters_from_query = shared_extract_filters_from_query
+
+
 async def rewrite_query(question: str, history: list) -> str:
     """
     모호한 사용자 질문을 검색에 최적화된 쿼리로 변환.
@@ -108,6 +135,39 @@ async def rewrite_query(question: str, history: list) -> str:
     return question
 
 
+async def generate_hyde_query(question: str, search_query: str) -> Optional[str]:
+    """
+    HyDE creates a short hypothetical answer for Dense retrieval only.
+    BM25 and final answer generation keep using the normal query flow.
+    """
+    if generation_model is None:
+        return None
+
+    prompt = f"""금융 대출 상품 검색을 위한 HyDE 문서를 작성하세요.
+아래 질문에 직접 답하는 것처럼, 실제 상품 문서에 들어 있을 법한 짧은 설명문을 만드세요.
+
+[규칙]
+1. 은행명, 대출종류, 상품명 후보, 금리, 한도, 가입조건 같은 검색 키워드를 자연스럽게 포함하세요.
+2. 확정되지 않은 숫자를 지어내지 말고, 필요하면 "금리", "한도", "조건" 같은 일반 표현을 쓰세요.
+3. 2~4문장으로만 작성하세요.
+4. 설명문만 출력하세요.
+
+[원래 질문]: {question}
+[검색 최적화 쿼리]: {search_query}
+
+HyDE 설명문:"""
+
+    try:
+        resp = await asyncio.to_thread(generation_model.generate_content, prompt)
+        hyde = resp.text.strip().strip('"').strip("'")
+        if hyde:
+            print(f"HyDE generated: {hyde[:120]}...")
+            return hyde
+    except Exception as e:
+        print(f"HyDE failed, using normal Dense query: {e}")
+    return None
+
+
 # Gemini Client 초기화
 try:
     google_api_key = os.getenv("GOOGLE_API_KEY")
@@ -130,9 +190,8 @@ except Exception as e:
 class ChatRequest(BaseModel):
     user_id: Union[str, int]
     question: str
-    allowed_banks: Optional[List[str]] = None
-    allowed_loan_types: Optional[List[str]] = None
     history: Optional[List[Dict[str, str]]] = None  # Spring이 MySQL에서 꺼내 전달
+    use_hyde: bool = False
 
 app.add_middleware(
     CORSMiddleware,
@@ -156,16 +215,10 @@ async def ask_chat(query: ChatRequest):
     question = query.question
 
     # --- 1. 자동 필터링 적용 ---
-    final_banks = query.allowed_banks
-    final_types = query.allowed_loan_types
-
-    if final_banks is None and final_types is None:
-         auto_banks, auto_types = extract_filters_from_query(question)
-         if final_banks is None: final_banks = auto_banks
-         if final_types is None: final_types = auto_types
-         
-         if auto_banks or auto_types:
-             print(f"🤖 자동 필터 적용: 은행={final_banks}, 종류={final_types}")
+    # Spring은 질문/히스토리만 전달하고, RAG 검색용 필터 추출은 FastAPI가 단일 책임으로 처리한다.
+    final_banks, final_types = extract_filters_from_query(question)
+    if final_banks or final_types:
+        print(f"🤖 자동 필터 적용: 은행={final_banks}, 종류={final_types}")
 
     # --- 2. 대화 히스토리 ---
     # Spring이 MySQL 히스토리를 실어 보내면 그걸 사용 (재시작해도 유지)
@@ -181,6 +234,10 @@ async def ask_chat(query: ChatRequest):
     # --- 3. 쿼리 재작성 (검색 품질 향상) ---
     # 재작성된 쿼리는 검색에만 사용; 답변 생성은 원본 question 유지
     rewritten = await rewrite_query(question, history)
+    expanded_query = expand_domain_synonyms(rewritten)
+    if expanded_query != rewritten:
+        print(f"Synonym expansion: '{rewritten}' -> '{expanded_query}'")
+    hyde_query = await generate_hyde_query(question, expanded_query) if query.use_hyde else None
 
     # --- 4. RAG 파이프라인 호출 (검색 + 리랭킹) ---
     top_docs, top_scores = await search_similar_docs(
@@ -188,7 +245,8 @@ async def ask_chat(query: ChatRequest):
         query=question,
         allowed_banks=final_banks,
         allowed_types=final_types,
-        rewritten_query=rewritten,
+        rewritten_query=expanded_query,
+        hyde_query=hyde_query,
     )
 
     if not top_docs:

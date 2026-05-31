@@ -24,6 +24,9 @@ if os.path.exists(dotenv_path):
 api_key         = os.getenv("OPENAI_API_KEY")
 qdrant_url      = os.getenv("QDRANT_URL", "http://qdrant:6333")
 collection_name = os.getenv("COLLECTION_NAME", "loan_docs")
+embedding_chunk_size = int(os.getenv("EMBEDDING_CHUNK_SIZE", "8"))
+qdrant_batch_size = int(os.getenv("QDRANT_BATCH_SIZE", "8"))
+embedding_max_retries = int(os.getenv("EMBEDDING_MAX_RETRIES", "20"))
 
 if not api_key:
     raise ValueError("OPENAI_API_KEY 환경변수가 설정되어 있지 않습니다.")
@@ -39,7 +42,13 @@ print(f"✅ BGE-Reranker 로딩 완료 (device={device})")
 # =======================
 # Qdrant 연결
 # =======================
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-3-small",
+    chunk_size=embedding_chunk_size,
+    max_retries=embedding_max_retries,
+    retry_min_seconds=1,
+    retry_max_seconds=20,
+)
 client     = QdrantClient(url=qdrant_url)
 vectorstore: Optional[Qdrant] = None
 _current_backing_collection: Optional[str] = None
@@ -50,6 +59,18 @@ _current_backing_collection: Optional[str] = None
 bm25_index:  Optional[BM25Okapi] = None
 bm25_corpus: List[str]  = []
 bm25_metas:  List[dict] = []
+
+
+def _normalize_allowed_types(allowed_types: Optional[List[str]]) -> Optional[List[str]]:
+    if not allowed_types:
+        return allowed_types
+    expanded = []
+    for loan_type in allowed_types:
+        if loan_type == "dambo":
+            expanded.extend(["dambo_mortgage", "dambo_jeonse"])
+        else:
+            expanded.append(loan_type)
+    return list(dict.fromkeys(expanded))
 
 
 def _build_bm25_index(docs: List[str], metas: Optional[List[dict]] = None):
@@ -93,6 +114,7 @@ def _bm25_search(
 ) -> List[Tuple[str, float]]:
     if bm25_index is None:
         return []
+    allowed_types = _normalize_allowed_types(allowed_types)
     scores  = bm25_index.get_scores(query.lower().split())
     indexed = list(enumerate(scores))
 
@@ -192,6 +214,7 @@ async def refresh_vectorstore(new_docs: List[str], new_metas: List[dict]) -> boo
             url=qdrant_url,
             collection_name=new_backing,
             force_recreate=True,
+            batch_size=qdrant_batch_size,
         )
 
         count = client.count(new_backing).count
@@ -257,6 +280,9 @@ async def search_similar_docs(
     allowed_banks: Optional[List[str]] = None,
     allowed_types: Optional[List[str]] = None,
     rewritten_query: Optional[str] = None,
+    hyde_query: Optional[str] = None,
+    top_k: int = 3,
+    candidate_k: int = 30,
 ) -> Tuple[List[str], List[float]]:
 
     if vectorstore is None:
@@ -272,6 +298,7 @@ async def search_similar_docs(
         )
         full_query = (recent_context + " " + query).strip()
 
+    allowed_types = _normalize_allowed_types(allowed_types)
     filters = []
     if allowed_banks:
         print(f"🔎 [필터] 은행: {allowed_banks}")
@@ -281,11 +308,14 @@ async def search_similar_docs(
         filters.append(FieldCondition(key="metadata.loan_type", match=MatchAny(any=allowed_types)))
 
     qdrant_filter = Filter(must=filters) if filters else None
+    dense_query = hyde_query or full_query
+    if hyde_query:
+        print("HyDE Dense query enabled")
 
     # 1단계: Dense 검색 (의미 기반)
     try:
         search_results = vectorstore.similarity_search_with_score(
-            full_query, k=30, filter=qdrant_filter
+            dense_query, k=candidate_k, filter=qdrant_filter
         )
         print(f"🔵 Dense 검색: {len(search_results)}개")
     except Exception as e:
@@ -299,7 +329,7 @@ async def search_similar_docs(
 
     # 2단계: BM25 검색 (키워드 기반)
     bm25_results = _bm25_search(
-        full_query, k=30,
+        full_query, k=candidate_k,
         allowed_banks=allowed_banks,
         allowed_types=allowed_types,
     )
@@ -307,7 +337,7 @@ async def search_similar_docs(
 
     # 3단계: RRF로 두 결과 통합
     if bm25_results:
-        candidate_docs = _rrf_merge(dense_results, bm25_results)[:30]
+        candidate_docs = _rrf_merge(dense_results, bm25_results)[:candidate_k]
         print(f"🔀 RRF 통합: {len(candidate_docs)}개 후보")
     else:
         candidate_docs = [doc for doc, _ in dense_results]
@@ -316,7 +346,7 @@ async def search_similar_docs(
     # 4단계: BGE-Reranker 최종 정렬
     print("⚡ BGE 리랭킹 중...")
     final_docs, final_scores = await asyncio.to_thread(
-        _rerank_local, full_query, candidate_docs, 3
+        _rerank_local, full_query, candidate_docs, top_k
     )
 
     return final_docs, final_scores
