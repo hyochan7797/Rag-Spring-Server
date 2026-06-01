@@ -25,8 +25,7 @@ services:
       - qdrant_storage:/qdrant/storage
 
   fastapi:
-    build:
-      context: ./python
+    image: ${FASTAPI_IMAGE:-ghcr.io/hyochan7797/rag-fastapi:latest}
     container_name: fastapi-app
     restart: unless-stopped
     env_file:
@@ -46,8 +45,7 @@ services:
       - hf_cache:/root/.cache/huggingface
 
   spring:
-    build:
-      context: ./java
+    image: ${SPRING_IMAGE:-ghcr.io/hyochan7797/rag-spring:latest}
     container_name: spring-app
     restart: unless-stopped
     ports:
@@ -67,8 +65,6 @@ services:
     depends_on:
       finance-mysql:
         condition: service_healthy
-      fastapi:
-        condition: service_started
 
 volumes:
   mysql_data:
