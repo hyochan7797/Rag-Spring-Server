@@ -1,0 +1,76 @@
+services:
+  finance-mysql:
+    image: mysql:8
+    container_name: finance-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: Asia/Seoul
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.10.0
+    container_name: qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+  fastapi:
+    build:
+      context: ./python
+    container_name: fastapi-app
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      COLLECTION_NAME: ${COLLECTION_NAME:-loan_docs}
+      HF_HOME: /root/.cache/huggingface
+      TZ: Asia/Seoul
+    depends_on:
+      finance-mysql:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    volumes:
+      - ./python/app/data:/app/data
+      - hf_cache:/root/.cache/huggingface
+
+  spring:
+    build:
+      context: ./java
+    container_name: spring-app
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_URL: jdbc:mysql://finance-mysql:3306/${MYSQL_DATABASE}
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_USER}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+      FASTAPI_URL: http://fastapi:8000/chat
+      FASTAPI_ADMIN_URL: http://fastapi:8000/admin/refresh
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      LOAN_REFRESH_CRON: ${LOAN_REFRESH_CRON:-0 0 2 * * *}
+      LOAN_REFRESH_ZONE: Asia/Seoul
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -Duser.timezone=Asia/Seoul"
+      TZ: Asia/Seoul
+    depends_on:
+      finance-mysql:
+        condition: service_healthy
+      fastapi:
+        condition: service_started
+
+volumes:
+  mysql_data:
+  qdrant_storage:
+  hf_cache:

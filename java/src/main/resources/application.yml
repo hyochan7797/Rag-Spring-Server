@@ -11,20 +11,35 @@ spring:
       ddl-auto: update
     properties:
       hibernate:
-        show_sql: true
+        show_sql: ${HIBERNATE_SHOW_SQL:true}
 
   batch:
     jdbc:
-      initialize-schema: always   # Spring Batch 메타 테이블 자동 생성
+      initialize-schema: ${SPRING_BATCH_JDBC_INITIALIZE_SCHEMA:always}
     job:
-      enabled: false              # 앱 시작 시 배치 자동 실행 방지
+      enabled: false
 
 server:
   port: 8080
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
 fastapi:
+  chat:
+    url: ${FASTAPI_URL:http://localhost:8000/chat}
   admin:
     url: ${FASTAPI_ADMIN_URL:http://localhost:8000/admin/refresh}
+    connect-timeout: ${FASTAPI_ADMIN_CONNECT_TIMEOUT:5s}
+    read-timeout: ${FASTAPI_ADMIN_READ_TIMEOUT:10m}
 
 loan-refresh:
-  cron: ${LOAN_REFRESH_CRON:0 0 2 * * *}   # 기본: 매일 새벽 2시
+  cron: ${LOAN_REFRESH_CRON:0 0 2 * * *}
+  zone: ${LOAN_REFRESH_ZONE:Asia/Seoul}

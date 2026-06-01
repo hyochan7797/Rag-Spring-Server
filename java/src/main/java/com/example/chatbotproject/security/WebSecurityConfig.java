@@ -16,7 +16,7 @@ import org.springframework.security.web.SecurityFilterChain;
 public class WebSecurityConfig {
 
     private final UserDetailService userService;
-    private final LoginSuccessHandler loginSuccessHandler;  // ✅ 핸들러 주입
+    private final LoginSuccessHandler loginSuccessHandler;
 
     @Bean
     public WebSecurityCustomizer configure() {
@@ -28,7 +28,8 @@ public class WebSecurityConfig {
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         return http
                 .authorizeRequests()
-                .requestMatchers("/login", "/signup", "/user", "/admin/batch/**").permitAll()
+                .requestMatchers("/login", "/signup", "/user", "/admin/batch/**",
+                        "/actuator/health", "/actuator/health/**").permitAll()
                 .anyRequest().authenticated()
                 .and()
                 .formLogin()

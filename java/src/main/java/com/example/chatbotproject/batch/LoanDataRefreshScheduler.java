@@ -18,27 +18,26 @@ public class LoanDataRefreshScheduler {
     private final JobLauncher jobLauncher;
     private final Job loanDataRefreshJob;
 
-    // application.yml의 loan-refresh.cron 값 사용, 기본값: 매일 새벽 2시
-    @Scheduled(cron = "${loan-refresh.cron:0 0 2 * * *}")
+    @Scheduled(cron = "${loan-refresh.cron:0 0 2 * * *}", zone = "${loan-refresh.zone:Asia/Seoul}")
     public void scheduledRefresh() {
-        log.info("[Scheduler] 정기 FSS 데이터 갱신 시작");
+        log.info("[Scheduler] Scheduled FSS refresh started");
         run("scheduled");
     }
 
     public JobExecution run(String triggeredBy) {
         try {
             JobParameters params = new JobParametersBuilder()
-                    .addLong("timestamp", System.currentTimeMillis())  // 매 실행마다 새 인스턴스
+                    .addLong("timestamp", System.currentTimeMillis())
                     .addString("triggeredBy", triggeredBy)
                     .toJobParameters();
 
             JobExecution execution = jobLauncher.run(loanDataRefreshJob, params);
-            log.info("[Scheduler] 배치 완료 — status={}, triggeredBy={}", execution.getStatus(), triggeredBy);
+            log.info("[Scheduler] Batch finished. status={}, triggeredBy={}", execution.getStatus(), triggeredBy);
             return execution;
 
         } catch (Exception e) {
-            log.error("[Scheduler] 배치 실행 실패: {}", e.getMessage(), e);
-            throw new RuntimeException("배치 실행 실패", e);
+            log.error("[Scheduler] Batch failed: {}", e.getMessage(), e);
+            throw new RuntimeException("Batch execution failed", e);
         }
     }
 }
