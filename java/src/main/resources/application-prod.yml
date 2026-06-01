@@ -1,0 +1,20 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
+    properties:
+      hibernate:
+        show_sql: false
+
+  batch:
+    jdbc:
+      initialize-schema: ${SPRING_BATCH_JDBC_INITIALIZE_SCHEMA:always}
+
+logging:
+  level:
+    root: INFO
+    org.hibernate.SQL: WARN
+    org.springframework.batch: INFO
+
+loan-refresh:
+  zone: ${LOAN_REFRESH_ZONE:Asia/Seoul}

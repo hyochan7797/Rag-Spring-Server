@@ -1,11 +1,9 @@
 import os
 import asyncio
 from dotenv import load_dotenv
-from typing import List, Tuple, Optional
+from typing import Any, List, Tuple, Optional
 
-import torch
 from rank_bm25 import BM25Okapi
-from sentence_transformers import CrossEncoder
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import (
     FieldCondition, Filter, MatchAny,
@@ -34,10 +32,7 @@ if not api_key:
 # =======================
 # BGE-Reranker 로딩 (로컬)
 # =======================
-print("🚀 BGE-Reranker 모델 로딩 중...")
-device = "cuda" if torch.cuda.is_available() else "cpu"
-reranker_model = CrossEncoder("BAAI/bge-reranker-v2-m3", max_length=1024, device=device)
-print(f"✅ BGE-Reranker 로딩 완료 (device={device})")
+reranker_model: Optional[Any] = None
 
 # =======================
 # Qdrant 연결
@@ -59,6 +54,19 @@ _current_backing_collection: Optional[str] = None
 bm25_index:  Optional[BM25Okapi] = None
 bm25_corpus: List[str]  = []
 bm25_metas:  List[dict] = []
+
+
+def _get_reranker_model() -> Any:
+    global reranker_model
+    if reranker_model is None:
+        import torch
+        from sentence_transformers import CrossEncoder
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Loading BGE reranker on first search. device={device}")
+        reranker_model = CrossEncoder("BAAI/bge-reranker-v2-m3", max_length=1024, device=device)
+        print("BGE reranker loaded.")
+    return reranker_model
 
 
 def _normalize_allowed_types(allowed_types: Optional[List[str]]) -> Optional[List[str]]:
@@ -180,11 +188,8 @@ def init_vectorstore_from_existing() -> bool:
     return False
 
 
-# 앱 시작 시 기존 데이터 재사용 시도
-try:
-    init_vectorstore_from_existing()
-except Exception as e:
-    print(f"⚠️ Qdrant 초기화 오류: {e}")
+def is_vectorstore_ready() -> bool:
+    return vectorstore is not None
 
 
 # =======================
@@ -266,7 +271,7 @@ def _rerank_local(query: str, docs: List[str], top_k: int = 3) -> Tuple[List[str
     if not docs:
         return [], []
     model_inputs = [[query, doc] for doc in docs]
-    scores  = reranker_model.predict(model_inputs)
+    scores  = _get_reranker_model().predict(model_inputs)
     results = sorted(zip(scores, docs), key=lambda x: x[0], reverse=True)
     return [doc for _, doc in results[:top_k]], [float(s) for s, _ in results[:top_k]]
 
