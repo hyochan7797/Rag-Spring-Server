@@ -67,10 +67,12 @@ jobs:
             APP_DIR="$HOME/Rag-Spring-Server"
             if [ ! -d "$APP_DIR/.git" ]; then
               rm -rf "$APP_DIR"
-              git clone "https://github.com/${{ github.repository }}.git" "$APP_DIR"
+              git -c http.extraheader="AUTHORIZATION: bearer ${{ secrets.DEPLOY_REPO_TOKEN }}" \
+                clone "https://github.com/${{ github.repository }}.git" "$APP_DIR"
             fi
             cd "$APP_DIR"
-            git fetch origin main
+            git -c http.extraheader="AUTHORIZATION: bearer ${{ secrets.DEPLOY_REPO_TOKEN }}" \
+              fetch origin main
             git reset --hard origin/main
             if [ ! -f .env ]; then
               echo "Missing $APP_DIR/.env"
