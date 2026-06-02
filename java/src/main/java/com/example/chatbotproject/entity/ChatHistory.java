@@ -24,12 +24,19 @@ public class ChatHistory {
     @Column(columnDefinition = "TEXT")
     private String response;
 
+    private Boolean ragEligible = true;
+
     @CreationTimestamp
     private Timestamp timestamp;
 
     public ChatHistory(Long userId, String message, String response) {
+        this(userId, message, response, true);
+    }
+
+    public ChatHistory(Long userId, String message, String response, boolean ragEligible) {
         this.userId = userId;
         this.message = message;
         this.response = response;
+        this.ragEligible = ragEligible;
     }
 }
