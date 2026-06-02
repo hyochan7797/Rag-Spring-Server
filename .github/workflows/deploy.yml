@@ -55,6 +55,17 @@ jobs:
           cache-from: type=gha,scope=spring
           cache-to: type=gha,scope=spring,mode=max
 
+      - name: Copy compose file to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          source: "docker-compose.spring-aws.yml"
+          target: "/home/${{ secrets.EC2_USER }}/Rag-Spring-Server"
+          overwrite: true
+
       - name: Deploy on EC2
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -65,16 +76,8 @@ jobs:
           script: |
             set -e
             APP_DIR="$HOME/Rag-Spring-Server"
-            REPO_URL="https://x-access-token:${{ secrets.DEPLOY_REPO_TOKEN }}@github.com/${{ github.repository }}.git"
-            if [ ! -d "$APP_DIR/.git" ]; then
-              rm -rf "$APP_DIR"
-              git clone "$REPO_URL" "$APP_DIR"
-            fi
+            mkdir -p "$APP_DIR"
             cd "$APP_DIR"
-            git remote set-url origin "$REPO_URL"
-            git fetch origin main
-            git reset --hard origin/main
-            git remote set-url origin "https://github.com/${{ github.repository }}.git"
             if [ ! -f .env ]; then
               echo "Missing $APP_DIR/.env"
               exit 1
