@@ -3,6 +3,7 @@ services:
     image: mysql:8
     container_name: finance-mysql
     restart: unless-stopped
+    command: --performance-schema=OFF
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
@@ -12,7 +13,7 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -30,10 +31,10 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
       FASTAPI_URL: ${FASTAPI_URL:?Set FASTAPI_URL to your local FastAPI tunnel /chat URL}
       FASTAPI_ADMIN_URL: ${FASTAPI_ADMIN_URL:?Set FASTAPI_ADMIN_URL to your local FastAPI tunnel /admin/refresh URL}
-      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?Set ADMIN_API_KEY}
       LOAN_REFRESH_CRON: ${LOAN_REFRESH_CRON:--}
       LOAN_REFRESH_ZONE: Asia/Seoul
-      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -Duser.timezone=Asia/Seoul"
+      JAVA_TOOL_OPTIONS: "-Xms128m -Xmx384m -Duser.timezone=Asia/Seoul"
       TZ: Asia/Seoul
     depends_on:
       finance-mysql:
