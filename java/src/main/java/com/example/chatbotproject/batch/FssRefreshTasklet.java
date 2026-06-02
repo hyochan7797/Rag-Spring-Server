@@ -37,6 +37,7 @@ public class FssRefreshTasklet implements Tasklet {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("X-Admin-Key", adminApiKey);
+        headers.set("ngrok-skip-browser-warning", "true");
 
         try {
             ResponseEntity<Map> response = fastApiAdminRestTemplate.postForEntity(

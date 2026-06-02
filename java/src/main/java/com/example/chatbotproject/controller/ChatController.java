@@ -6,9 +6,13 @@ import com.example.chatbotproject.service.FastApiService;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-import java.util.*;
+import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api")
@@ -17,7 +21,6 @@ public class ChatController {
 
     private final FastApiService fastApiService;
     private final ChatHistoryRepository chatHistoryRepository;
-
 
     @PostMapping("/ask")
     public ResponseEntity<Map<String, String>> askRag(@RequestBody Map<String, String> body, HttpSession session) {
@@ -32,27 +35,14 @@ public class ChatController {
             return ResponseEntity.badRequest().body(Map.of("error", "질문이 비어 있습니다."));
         }
 
-
-        // 📍 챗봇 첫 인사말 세션으로 확인
-        boolean greeted = Boolean.TRUE.equals(session.getAttribute("greeted"));
-        session.setAttribute("greeted", true);  // 첫 방문 여부 저장
-
-        StringBuilder answerBuilder = new StringBuilder();
-
-
-
-        // 📡 FastAPI 호출
-        String answer = fastApiService.askFastApi(userId, question);
-
-        // 🧠 지도 버튼 삽입 로직
-        List<String> BANKS = List.of("국민은행", "하나은행", "우리은행");
-        for (String bank : BANKS) {
+        List<String> banks = List.of("국민은행", "하나은행", "우리은행");
+        for (String bank : banks) {
             if (question.equals("근처 " + bank + " 알려줘")) {
                 String htmlAnswer = String.format(
                         "근처 %s 지점을 확인하려면 아래 버튼을 눌러주세요.<br><br>" +
                                 "<a href='/map.html?bank=%s' target='_blank' style='" +
                                 "background:#2563eb;color:white;padding:8px 12px;border-radius:6px;" +
-                                "text-decoration:none;display:inline-block;'>📍 지도에서 %s 보기</a>",
+                                "text-decoration:none;display:inline-block;'>지도에서 %s 보기</a>",
                         bank, bank, bank
                 );
 
@@ -61,11 +51,9 @@ public class ChatController {
             }
         }
 
-        // 💾 DB 저장
-        ChatHistory chat = new ChatHistory(userId, question, answer);
-        chatHistoryRepository.save(chat);
+        String answer = fastApiService.askFastApi(userId, question);
+        chatHistoryRepository.save(new ChatHistory(userId, question, answer));
 
-        // 📤 응답 반환
         return ResponseEntity.ok(Map.of("answer", answer));
     }
 }

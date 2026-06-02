@@ -41,5 +41,5 @@ fastapi:
     read-timeout: ${FASTAPI_ADMIN_READ_TIMEOUT:10m}
 
 loan-refresh:
-  cron: ${LOAN_REFRESH_CRON:0 0 2 * * *}
+  cron: ${LOAN_REFRESH_CRON:-}
   zone: ${LOAN_REFRESH_ZONE:Asia/Seoul}

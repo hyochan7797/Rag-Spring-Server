@@ -8,6 +8,7 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.WebSecurityCustomizer;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 
@@ -27,21 +28,21 @@ public class WebSecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         return http
-                .authorizeRequests()
-                .requestMatchers("/login", "/signup", "/user", "/admin/batch/**",
-                        "/actuator/health", "/actuator/health/**").permitAll()
-                .anyRequest().authenticated()
-                .and()
-                .formLogin()
-                .loginPage("/login")
-                .successHandler(loginSuccessHandler)
-                .failureUrl("/login?error=true")
-                .and()
-                .logout()
-                .logoutSuccessUrl("/login")
-                .invalidateHttpSession(true)
-                .and()
-                .csrf().disable()
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/login", "/signup", "/user", "/admin/batch/**",
+                                "/actuator/health", "/actuator/health/**").permitAll()
+                        .anyRequest().authenticated()
+                )
+                .formLogin(form -> form
+                        .loginPage("/login")
+                        .successHandler(loginSuccessHandler)
+                        .failureUrl("/login?error=true")
+                )
+                .logout(logout -> logout
+                        .logoutSuccessUrl("/login")
+                        .invalidateHttpSession(true)
+                )
+                .csrf(AbstractHttpConfigurer::disable)
                 .build();
     }
 
@@ -49,11 +50,10 @@ public class WebSecurityConfig {
     public AuthenticationManager authenticationManager(HttpSecurity http,
                                                        BCryptPasswordEncoder bCryptPasswordEncoder,
                                                        UserDetailService userDetailService) throws Exception {
-        return http.getSharedObject(AuthenticationManagerBuilder.class)
-                .userDetailsService(userService)
-                .passwordEncoder(bCryptPasswordEncoder)
-                .and()
-                .build();
+        AuthenticationManagerBuilder builder = http.getSharedObject(AuthenticationManagerBuilder.class);
+        builder.userDetailsService(userService)
+                .passwordEncoder(bCryptPasswordEncoder);
+        return builder.build();
     }
 
     @Bean

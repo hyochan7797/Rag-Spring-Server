@@ -44,6 +44,7 @@ public class FastApiService {
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("ngrok-skip-browser-warning", "true");
 
         try {
             ResponseEntity<Map> response = fastApiAdminRestTemplate.postForEntity(

@@ -28,8 +28,8 @@ services:
       SPRING_DATASOURCE_URL: jdbc:mysql://finance-mysql:3306/${MYSQL_DATABASE}
       SPRING_DATASOURCE_USERNAME: ${MYSQL_USER}
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
-      FASTAPI_URL: ${FASTAPI_URL:-http://localhost:8000/chat}
-      FASTAPI_ADMIN_URL: ${FASTAPI_ADMIN_URL:-http://localhost:8000/admin/refresh}
+      FASTAPI_URL: ${FASTAPI_URL:?Set FASTAPI_URL to your local FastAPI tunnel /chat URL}
+      FASTAPI_ADMIN_URL: ${FASTAPI_ADMIN_URL:?Set FASTAPI_ADMIN_URL to your local FastAPI tunnel /admin/refresh URL}
       ADMIN_API_KEY: ${ADMIN_API_KEY}
       LOAN_REFRESH_CRON: ${LOAN_REFRESH_CRON:--}
       LOAN_REFRESH_ZONE: Asia/Seoul
