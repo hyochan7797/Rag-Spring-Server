@@ -1,10 +1,10 @@
 package com.example.chatbotproject.controller;
 
-import com.example.chatbotproject.entity.ChatHistory;
-import com.example.chatbotproject.repository.ChatHistoryRepository;
+import com.example.chatbotproject.service.ChatHistoryService;
 import com.example.chatbotproject.service.FastApiService;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -20,7 +20,7 @@ import java.util.Map;
 public class ChatController {
 
     private final FastApiService fastApiService;
-    private final ChatHistoryRepository chatHistoryRepository;
+    private final ChatHistoryService chatHistoryService;
 
     @PostMapping("/ask")
     public ResponseEntity<Map<String, String>> askRag(@RequestBody Map<String, String> body, HttpSession session) {
@@ -46,13 +46,19 @@ public class ChatController {
                         bank, bank, bank
                 );
 
-                chatHistoryRepository.save(new ChatHistory(userId, question, htmlAnswer));
+                chatHistoryService.saveDisplayOnlyHistory(userId, question, htmlAnswer);
                 return ResponseEntity.ok(Map.of("answer", htmlAnswer));
             }
         }
 
-        String answer = fastApiService.askFastApi(userId, question);
-        chatHistoryRepository.save(new ChatHistory(userId, question, answer));
+        String answer;
+        try {
+            answer = fastApiService.askFastApi(userId, question);
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                    .body(Map.of("error", "AI 서버 응답에 실패했습니다. 잠시 후 다시 시도해주세요."));
+        }
+        chatHistoryService.saveRagHistory(userId, question, answer);
 
         return ResponseEntity.ok(Map.of("answer", answer));
     }
