@@ -221,7 +221,6 @@
     const input = document.getElementById("messageInput");
     const chatBox = document.getElementById("chatBox");
     const sendButton = document.getElementById("sendButton");
-    const loadingMessage = document.getElementById("loadingMessage");
     let sending = false;
 
     const GREETING_MESSAGE = `
@@ -232,7 +231,7 @@
 `.trim().replace(/\n/g, "<br>");
 
     window.onload = function() {
-        chatBox.innerHTML += `<div class="bot-message"><strong>챗봇:</strong> ${GREETING_MESSAGE}</div>`;
+        appendMessage("bot-message", `<strong>챗봇:</strong> ${GREETING_MESSAGE}`);
         chatBox.scrollTop = chatBox.scrollHeight;
     };
 
@@ -244,11 +243,13 @@
 
         sending = true;
         sendButton.disabled = true;
-        chatBox.innerHTML += `<div class="user-message"><strong>나:</strong> ${escapeHtml(message)}</div>`;
+        appendMessage("user-message", `<strong>나:</strong> ${escapeHtml(message)}`);
         input.value = "";
         chatBox.scrollTop = chatBox.scrollHeight;
 
+        const loadingMessage = document.getElementById("loadingMessage");
         loadingMessage.style.display = "block";
+        chatBox.appendChild(loadingMessage);
         chatBox.scrollTop = chatBox.scrollHeight;
 
         fetch("/api/ask", {
@@ -263,15 +264,15 @@
             })
             .then(data => {
                 if (data.answer) {
-                    chatBox.innerHTML += `<div class="bot-message"><strong>챗봇:</strong> ${data.answer.replace(/\n/g, "<br>")}</div>`;
+                    appendMessage("bot-message", `<strong>챗봇:</strong> ${data.answer.replace(/\n/g, "<br>")}`);
                 } else {
-                    chatBox.innerHTML += `<div class="bot-message" style="color:red;"><strong>오류:</strong> 챗봇 응답이 없습니다.</div>`;
+                    appendMessage("bot-message", `<span style="color:red;"><strong>오류:</strong> 챗봇 응답이 없습니다.</span>`);
                 }
                 chatBox.scrollTop = chatBox.scrollHeight;
             })
             .catch(error => {
                 console.error("Error:", error);
-                chatBox.innerHTML += `<div class="bot-message" style="color:red;"><strong>오류:</strong> 서버 통신에 실패했습니다.</div>`;
+                appendMessage("bot-message", `<span style="color:red;"><strong>오류:</strong> 서버 통신에 실패했습니다.</span>`);
             })
             .finally(() => {
                 loadingMessage.style.display = "none";
@@ -279,6 +280,13 @@
                 sendButton.disabled = false;
                 chatBox.scrollTop = chatBox.scrollHeight;
             });
+    }
+
+    function appendMessage(className, html) {
+        const message = document.createElement("div");
+        message.className = className;
+        message.innerHTML = html;
+        chatBox.appendChild(message);
     }
 
     function escapeHtml(value) {
